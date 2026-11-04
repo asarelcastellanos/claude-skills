@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 $repo = $PSScriptRoot
 $claude = Join-Path $HOME ".claude"
 $skillsDir = Join-Path $claude "skills"
-$backup = Join-Path $claude ("skills-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+$backup = Join-Path $claude ("skills-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff"))
 
 New-Item -ItemType Directory -Force $skillsDir | Out-Null
 

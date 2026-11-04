@@ -31,3 +31,5 @@ Code organization:
 **The tests:**
 - "Is this data crossing a system boundary right now?" If not, validation is redundant.
 - "Can this be a pure function that the shell just calls?" If yes, extract it.
+
+**Related skills:** `principle-type-system-discipline` covers how to type the data once it is parsed. `typescript-best-practices` shows the TypeScript syntax.

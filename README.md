@@ -59,8 +59,9 @@ Copy the folders you want into `~/.claude/skills/` (every project) or `.claude/s
 
 Most skills stand alone. These depend on others:
 
-- `technical-writing` and `git-messages` apply `unslop`.
-- `typescript-best-practices` refers to the three `principle-*` skills.
+- `technical-writing` and `git-messages` apply `unslop`, and `technical-writing` hands commit messages and PR descriptions to `git-messages`.
+- `typescript-best-practices` and `principle-boundary-discipline` refer to `principle-type-system-discipline`, and it refers to `principle-encode-lessons-in-structure`.
+- `web-ui` applies `typescript-best-practices` and `principle-boundary-discipline` to the code it writes.
 - `web-ui` works best with `heroui-react` for React projects.
 
 ## Make it yours

@@ -2,9 +2,17 @@
 # Links each skill in this repo into ~/.claude/skills and imports this repo's CLAUDE.md.
 set -euo pipefail
 
+# Git Bash and Cygwin copy instead of linking without Developer Mode, so updates would never reach ~/.claude.
+case "$(uname -s)" in
+	MINGW* | MSYS* | CYGWIN*)
+		echo "On Windows, run install.ps1 instead." >&2
+		exit 1
+		;;
+esac
+
 repo="$(cd "$(dirname "$0")" && pwd)"
 skills_dir="$HOME/.claude/skills"
-backup="$HOME/.claude/skills-backup-$(date +%Y%m%d-%H%M%S)"
+backup="$HOME/.claude/skills-backup-$(date +%Y%m%d-%H%M%S)-$$"
 
 mkdir -p "$skills_dir"
 

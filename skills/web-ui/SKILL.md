@@ -42,6 +42,16 @@ The same deployments dashboard is built three ways. Start from the one closest t
 - `examples/react/dashboard.tsx`
 - `examples/vue/Dashboard.vue`
 - `examples/html/dashboard.html`
+
+## Write the code to the same standard
+
+The design rules cover how the page looks. The code follows the code skills:
+
+- Apply `typescript-best-practices` to every `.ts`, `.tsx`, and `<script lang="ts">` block. Model page state as a union with a `kind` field, check every case in a `switch`, and use `satisfies` instead of `as`.
+- Apply `principle-boundary-discipline`. Load and parse data in one place, at the page, and pass typed props to everything below it. Components never fetch.
+
+The examples follow both skills.
+
 ## Use tokens, not colors
 
 The theme is a set of semantic tokens. Each one is a Tailwind utility. Never use raw palette classes such as `bg-indigo-600`, `text-gray-500`, or `border-slate-200` in product code. Raw colors break dark mode and break the shared look.
