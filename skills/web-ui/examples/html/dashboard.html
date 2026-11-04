@@ -1,0 +1,141 @@
+<!doctype html>
+<!--
+	Deployments dashboard in plain HTML with @heroui/styles. The layout and classes match the React example.
+	Build the CSS first. See ../../references/setup.md, "Plain HTML":
+	  npx @tailwindcss/cli -i input.css -o styles.css
+-->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Deployments · Acme</title>
+		<script>
+			// Runs before the first paint so dark-mode users never see a light flash.
+			if (matchMedia("(prefers-color-scheme: dark)").matches) {
+				document.documentElement.classList.add("dark");
+				document.documentElement.dataset.theme = "dark";
+			}
+		</script>
+		<link rel="stylesheet" href="styles.css" />
+	</head>
+	<body class="min-h-dvh bg-background text-foreground">
+		<!-- App shell: top bar -->
+		<header class="border-b border-separator">
+			<div class="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4 sm:px-6">
+				<a href="/" class="flex items-center gap-2 text-sm font-semibold">
+					<span aria-hidden="true" class="size-5 rounded-md bg-accent"></span>
+					Acme
+				</a>
+				<nav class="flex gap-4 text-sm">
+					<a href="/deployments" aria-current="page" class="text-foreground">Deployments</a>
+					<a href="/projects" class="text-muted hover:text-foreground">Projects</a>
+					<a href="/billing" class="text-muted hover:text-foreground">Billing</a>
+				</nav>
+				<span class="avatar avatar--sm ml-auto">
+					<span class="avatar__fallback avatar__fallback--default">JR</span>
+				</span>
+			</div>
+		</header>
+
+		<main class="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6">
+			<!-- Page header -->
+			<div class="flex flex-wrap items-end justify-between gap-4">
+				<div class="flex flex-col gap-1">
+					<h1 class="text-2xl font-semibold tracking-tight">Deployments</h1>
+					<p class="text-sm text-muted">3 today across all projects.</p>
+				</div>
+				<button type="button" class="button button--primary">Deploy now</button>
+			</div>
+
+			<!-- Stat row -->
+			<div class="grid gap-4 sm:grid-cols-3">
+				<article class="card card--default">
+					<div class="card__content flex flex-col gap-1">
+						<span class="text-sm text-muted">Deployments today</span>
+						<span class="text-3xl font-semibold tabular-nums">3</span>
+						<span class="text-xs text-muted">2 more than yesterday</span>
+					</div>
+				</article>
+				<article class="card card--default">
+					<div class="card__content flex flex-col gap-1">
+						<span class="text-sm text-muted">Failed</span>
+						<span class="text-3xl font-semibold tabular-nums">1</span>
+						<span class="text-xs text-muted">Check the logs below</span>
+					</div>
+				</article>
+				<article class="card card--default">
+					<div class="card__content flex flex-col gap-1">
+						<span class="text-sm text-muted">Average build</span>
+						<span class="text-3xl font-semibold tabular-nums">46s</span>
+						<span class="text-xs text-muted">4s faster than yesterday</span>
+					</div>
+				</article>
+			</div>
+
+			<!-- Table section -->
+			<section class="flex flex-col gap-4">
+				<h2 class="text-base font-semibold">Recent deployments</h2>
+				<div class="table-root table-root--primary">
+					<div class="table__scroll-container">
+						<table class="table__content min-w-[560px]" aria-label="Recent deployments">
+							<thead class="table__header">
+								<tr>
+									<th class="table__column" scope="col">Project</th>
+									<th class="table__column" scope="col">Branch</th>
+									<th class="table__column" scope="col">Status</th>
+									<th class="table__column" scope="col">Duration</th>
+								</tr>
+							</thead>
+							<tbody class="table__body">
+								<tr class="table__row">
+									<th class="table__cell text-start font-normal" scope="row">api-gateway</th>
+									<td class="table__cell font-mono text-xs text-muted">main</td>
+									<td class="table__cell"><span class="chip chip--secondary chip--success chip--sm"><span class="chip__label">Ready</span></span></td>
+									<td class="table__cell tabular-nums">42s</td>
+								</tr>
+								<tr class="table__row">
+									<th class="table__cell text-start font-normal" scope="row">web</th>
+									<td class="table__cell font-mono text-xs text-muted">fix/checkout-total</td>
+									<td class="table__cell"><span class="chip chip--secondary chip--warning chip--sm"><span class="chip__label">Building</span></span></td>
+									<td class="table__cell tabular-nums">18s</td>
+								</tr>
+								<tr class="table__row">
+									<th class="table__cell text-start font-normal" scope="row">worker</th>
+									<td class="table__cell font-mono text-xs text-muted">main</td>
+									<td class="table__cell"><span class="chip chip--secondary chip--danger chip--sm"><span class="chip__label">Failed</span></span></td>
+									<td class="table__cell tabular-nums">77s</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</section>
+
+			<!--
+				Other states. Show one of these in place of the stat row and table.
+
+				Loading:
+				<div class="grid gap-4 sm:grid-cols-3">
+					<div class="skeleton skeleton--shimmer h-28 rounded-3xl"></div>
+					<div class="skeleton skeleton--shimmer h-28 rounded-3xl"></div>
+					<div class="skeleton skeleton--shimmer h-28 rounded-3xl"></div>
+				</div>
+
+				Empty:
+				<div class="flex flex-col items-center gap-3 rounded-3xl bg-surface-secondary px-6 py-12 text-center">
+					<p class="text-sm font-medium">No deployments yet</p>
+					<p class="max-w-sm text-sm text-muted">Push to <code class="font-mono">main</code> or run <code class="font-mono">acme deploy</code> to create the first one.</p>
+					<button type="button" class="button button--secondary button--sm">Read the deploy guide</button>
+				</div>
+
+				Error:
+				<div class="alert alert--danger" role="alert">
+					<div class="alert__content">
+						<p class="alert__title">Couldn't load deployments</p>
+						<p class="alert__description">The API returned 503. Try again in a minute.</p>
+					</div>
+				</div>
+			-->
+		</main>
+	</body>
+</html>
