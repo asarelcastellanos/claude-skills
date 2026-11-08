@@ -14,6 +14,15 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 | `technical-writing` | Rules for docs, READMEs, and PRs, drawing on Diátaxis, the Google developer style guide, Simplified Technical English, and Global English. |
 | `git-messages` | Commit messages and PR descriptions as short bullets that say what changed and why. They never include AI attribution lines. |
 
+### Pull requests
+
+| Skill | What it does |
+|---|---|
+| `ship-a-change` | Carries one code change from request to merged PR in eight steps, and calls the three skills below at the right points. |
+| `verify-before-pr` | Runs the real checks, uses the change the way a user would, gets a fresh-context review, and sets the risk tier for the PR description. |
+| `pr-review` | Reviews a diff for real bugs. Finder agents each take one lens, separate agents verify each finding, and re-reviews stop after three rounds. |
+| `address-review-findings` | Gives every review finding an outcome, fixes each mistake everywhere it appears, and escalates to the user after three rounds. |
+
 ### Code
 
 | Skill | What it does |
@@ -63,6 +72,7 @@ Most skills stand alone. These depend on others:
 - `typescript-best-practices` and `principle-boundary-discipline` refer to `principle-type-system-discipline`, and it refers to `principle-encode-lessons-in-structure`.
 - `web-ui` applies `typescript-best-practices` and `principle-boundary-discipline` to the code it writes.
 - `web-ui` works best with `heroui-react` for React projects.
+- `ship-a-change` runs `verify-before-pr`, `pr-review` and `address-review-findings`. `verify-before-pr` writes the PR description with `git-messages`.
 
 ## Make it yours
 

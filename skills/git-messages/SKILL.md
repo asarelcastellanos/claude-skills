@@ -56,12 +56,17 @@ A one-line change can skip the body.
 ## Testing
 - <what you ran or checked, with the command>
 
+## Risk
+- Tier: <low, medium, or high>, because <what the change touches>
+- Revert: <revert the commit, turn off a flag, or roll back a migration>
+
 ## Notes
-- <risk, follow-up, or reviewer focus; omit the section if there is none>
+- <follow-up or reviewer focus; omit the section if there is none>
 ```
 
 - A reviewer reads it in under a minute.
 - Link to logs, screenshots, and long tables. Don't paste them.
+- "Risk" uses the tiers in the `verify-before-pr` skill.
 - "Testing" states what actually ran. If nothing ran, say "- Not tested" and why.
 - The PR title follows the commit subject rules.
 
