@@ -96,13 +96,21 @@ The script links each folder in `skills/` into `~/.claude/skills/`. On Windows i
 
 The skills are links, not copies, so `git pull` updates them. You don't need to reinstall.
 
+### The mods run code from your checkout
+
+The mods are hooks, and Claude Code runs them with your permissions. Because they load from this folder, every session runs the mod code on the branch you have checked out. Keep this clone on `main`, and review other people's branches and PRs in a separate clone or a git worktree. Otherwise, checking out an untrusted branch runs its hooks in your next session.
+
 ### Install only some mods
 
-From a terminal session, install one mod by name:
+To keep only some mods, remove the others' folders from `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Running the install script adds them back.
+
+Without cloning the repo, you can install one mod from GitHub instead:
 
 ```
 /plugin install session-monitor --marketplace asarelcastellanos/claude-workbench
 ```
+
+Don't do both on one machine, or the mod loads twice.
 
 ### Install only some skills
 
