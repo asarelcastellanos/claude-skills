@@ -23,6 +23,7 @@ import {
   formatTokens,
   locationLine,
   META_INDENT,
+  MIN_COLS,
   order,
   parseGitStatus,
   policyLines,
@@ -416,10 +417,23 @@ describe('pane layout', () => {
     expect(two).toBe('12 tools \u00b7 18k tok \u00b7 scan_secrets')
   })
 
-  test('a very narrow pane drops the tool but keeps the counts', async () => {
-    const [one, two] = agentMeta(meta(), 64_000, 22)
+  test('an empty name after a prefix is no name', async () => {
+    expect(typeName('plugin:')).toBe('plugin:')
+    expect(toolName('mcp__')).toBeUndefined()
+    expect(toolName('mcp__x__')).toBeUndefined()
+    const [one, two] = agentMeta(meta({ type: 'plugin:', lastTool: 'mcp__x__' }), 64_000, 40)
+    expect(one).toBe('plugin: \u00b7 Sonnet \u00b7 1m 04s')
     expect(two).toBe('12 tools \u00b7 18k tok')
-    expect(one.endsWith('1m 04s')).toBe(true)
+  })
+
+  test('at MIN_COLS the counts, model and duration survive the pane truncation', async () => {
+    expect(MIN_COLS).toBe(23)
+    const rows = agentMeta(meta(), 64_000, MIN_COLS).map(text =>
+      truncate(`${' '.repeat(META_INDENT)}${text}`, MIN_COLS),
+    )
+    expect(rows[0]).toContain(' \u00b7 Sonnet \u00b7 1m 04s')
+    expect(rows[1]).toBe('    12 tools \u00b7 18k tok')
+    for (const row of rows) expect(row.includes('~')).toBe(false)
   })
 
   test('familyName capitalizes the family', async () => {

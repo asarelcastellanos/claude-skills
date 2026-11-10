@@ -25,6 +25,7 @@ import {
   limitLabel,
   locationLine,
   META_INDENT,
+  MIN_COLS,
   parseGitStatus,
   policyLines,
   resolved,
@@ -325,7 +326,7 @@ export const register: Register = on => {
     const policy = await readPolicy($)
     await read($, clock)
     const now = await $.clock.now()
-    const cols = Math.max(10, e.props.bodyColumns)
+    const cols = Math.max(MIN_COLS, e.props.bodyColumns)
     const height = e.props.scroll.bodyRows || e.viewport?.rows || 40
     const barWidth = cols >= 34 ? 10 : 6
 

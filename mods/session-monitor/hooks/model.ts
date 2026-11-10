@@ -227,12 +227,29 @@ export const AGENT_ROWS = 3
 /** Spaces the pane puts before each meta row. */
 export const META_INDENT = 4
 
-/** `model-policy:reviewer` becomes `reviewer`. */
-export const typeName = (type: string): string => type.slice(type.lastIndexOf(':') + 1)
+/** `model-policy:reviewer` becomes `reviewer`. A type with nothing after the colon stays as it is. */
+export const typeName = (type: string): string => {
+  const name = type.slice(type.lastIndexOf(':') + 1)
+  return name === '' ? type : name
+}
 
-/** `mcp__plugin-authoring__scan_secrets` becomes `scan_secrets`. Other tools keep their name. */
-export const toolName = (tool: string): string =>
-  tool.startsWith('mcp__') ? (tool.split('__').pop() ?? tool) : tool
+/**
+ * `mcp__plugin-authoring__scan_secrets` becomes `scan_secrets`. Other tools keep their name.
+ * An MCP name with nothing after its last `__` has no name to show.
+ */
+export const toolName = (tool: string): string | undefined => {
+  if (!tool.startsWith('mcp__')) return tool
+  const name = tool.slice(tool.lastIndexOf('__') + 2)
+  return name === '' ? undefined : name
+}
+
+/**
+ * The narrowest body, in columns, the pane lays out for. At this width an agent's
+ * two meta rows still show the model, duration, tool count and token count whole
+ * (4 spaces, a 1 character type, `Sonnet`, `1m 04s`, `12 tools`, `18k tok`).
+ * Below it the pane draws as if it were this wide and the host may cut the rows.
+ */
+export const MIN_COLS = 23
 
 const SEP = ' \u00b7 '
 
