@@ -2,6 +2,11 @@
 
 Mistakes worth remembering, newest first. Step 7 of the `ship-a-change` skill adds entries. When a mistake shows up here twice, it needs a lasting fix instead of a second entry.
 
+## 2026-11-10: The installer removed the mods before it could load them
+- What happened: the first version of the load-from-repo installer uninstalled the marketplace copies before it validated and wrote settings.json, so a bad settings file, a broken python3 or a project-scope install left no mods loaded, model-policy included.
+- Caught by: the review, four of five lenses
+- Fix: the installer now writes settings.json first and uninstalls last, and `test-install.sh` checks each failure case in a scratch config. Destructive steps in any installer go after the step that can fail.
+
 ## 2026-11-10: Renaming the marketplace broke existing installs
 - What happened: the marketplace rename only changed the new name in the installers, so re-running install.sh on a machine with the old marketplace failed, and a fresh clone loaded every mod twice.
 - Caught by: the review, integration lens
