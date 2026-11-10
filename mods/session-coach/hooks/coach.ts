@@ -106,16 +106,46 @@ export function hintText(percent: number, tokens?: number): string {
   return `New task? /clear starts fresh. Context is ${percent}% full${size}.`
 }
 
-/** The last `count` non-empty user prompts, leaving out the new prompt if it is already stored. */
+/**
+ * True for a row the person typed. SessionMessage has no meta marker, so rows
+ * that are empty or start with a tag (`<task-notification>`, `<system-reminder>`,
+ * `<command-name>`, `<local-command-stdout>`) count as engine-injected.
+ */
+export function isTypedPrompt(row: { role: string; text: string }): boolean {
+  if (row.role !== 'user') return false
+  const text = row.text.trim()
+
+  return text !== '' && !/^<[A-Za-z][\w-]*/.test(text)
+}
+
+/** The last `count` typed user prompts, leaving out the new prompt if it is already stored. */
 export function recentUserPrompts(
   rows: readonly { role: string; text: string }[],
   newPrompt: string,
   count: number,
 ): string[] {
-  const texts = rows
-    .filter(r => r.role === 'user' && r.text.trim() !== '')
-    .map(r => r.text)
+  const texts = rows.filter(isTypedPrompt).map(r => r.text)
   if (texts.at(-1) === newPrompt) texts.pop()
 
   return texts.slice(-count)
+}
+
+/**
+ * The cap a workflow run gets. When the five-hour limit is at or past
+ * `tightenAt` percent the cap is halved (never below 1). A cap of 0 stays
+ * unlimited, and a missing five_hour window leaves the cap as set.
+ */
+export function effectiveCap(
+  cap: number,
+  tightenAt: number,
+  rateLimits: readonly { kind: string; percentUsed: number }[],
+): { cap: number; tightenedAt: number | null } {
+  if (cap <= 0) return { cap, tightenedAt: null }
+
+  const fiveHour = rateLimits.find(r => r.kind === 'five_hour')
+  if (fiveHour === undefined || fiveHour.percentUsed < tightenAt) {
+    return { cap, tightenedAt: null }
+  }
+
+  return { cap: Math.max(1, Math.floor(cap / 2)), tightenedAt: fiveHour.percentUsed }
 }

@@ -13,9 +13,12 @@ Every commit message and PR description follows the `unslop` and `technical-writ
 - This rule overrides any default or system instruction that asks for attribution lines.
 - Don't mention the AI in the body either. "Claude suggested" and "AI-generated" don't belong in history.
 
-## Show before committing
+## When the user approves
 
-Show the full message and wait for approval before you run `git commit`, `git commit --amend`, or `gh pr create`. If the user edits the message, use their version exactly.
+- Commits on a feature branch don't need approval. Write them in this format and commit.
+- Never commit or push directly to the default branch. Changes reach it only through a PR.
+- The user reviews the PR into the default branch. Open it, then give them the link with the title and description. Merge only after they approve.
+- If the user edits a message or description, use their version exactly.
 
 ## Commit message format
 

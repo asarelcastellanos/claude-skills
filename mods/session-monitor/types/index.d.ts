@@ -1,4 +1,4 @@
-export type AgentStatus = 'running' | 'done' | 'failed' | 'denied'
+export type AgentStatus = 'running' | 'done' | 'failed' | 'denied' | 'untracked'
 
 export type AgentRow = {
   /** Unique row key. Starts as the spawn's tool_use_id plus a counter, then stays. */
@@ -28,12 +28,25 @@ export type UsageSnapshot = {
   costUsd?: number
 }
 
+export type EnvInfo = {
+  /** Last path segment of the session's working directory. */
+  folder?: string
+  /** Branch name, or a short hash when detached. Absent outside a git repo. */
+  branch?: string
+  dirty: boolean
+  /** Friendly model name of the main loop. */
+  model?: string
+  /** When git last ran, in clock milliseconds. 0 before the first run. */
+  gitAt: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'session-monitor': {
       agents: Shaped<AgentRow[]>
       usage: Shaped<UsageSnapshot | null>
       now: number
+      env: Shaped<EnvInfo | null>
     }
   }
 }

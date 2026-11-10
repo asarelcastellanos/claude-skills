@@ -2,6 +2,21 @@
 	"name": "model-policy",
 	"version": "0.1.0",
 	"author": { "name": "Asarel Castellanos" },
-	"description": "Opus plans, supervises, and reviews. Sonnet writes code and runs every subagent task except review.",
-	"types": "./types/index.d.ts"
+	"description": "Opus runs only in the main session. Subagents run on Sonnet at most, and on Haiku for lookups and mechanical edits.",
+	"types": "./types/index.d.ts",
+	"userConfig": {
+		"mechanicModel": {
+			"type": "string",
+			"title": "Mechanic model",
+			"description": "Model for model-policy:mechanic agents.",
+			"default": "haiku",
+			"options": ["haiku", "sonnet"]
+		},
+		"workflowConfirmAtPercent": {
+			"type": "number",
+			"title": "Confirm workflows at 5-hour percent",
+			"description": "From this 5-hour usage percent on, the person must confirm each Workflow the main session starts.",
+			"default": 95
+		}
+	}
 }

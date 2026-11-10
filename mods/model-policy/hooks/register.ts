@@ -1,21 +1,38 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ModelPolicyUsage } from '../types'
-import { FAMILIES, decideSpawn, family, isFileWrite, mainSessionMayWrite } from './policy'
+import type { ModelPolicyDay, ModelPolicyUsage } from '../types'
+import {
+	FAMILIES,
+	addSpawn,
+	addTurn,
+	compact,
+	dateOfKey,
+	dayKey,
+	dayStoreKey,
+	decideSpawn,
+	emptyDay,
+	family,
+	fiveHourPercent,
+	formatWeek,
+	isFileWrite,
+	mainSessionMayWrite,
+	mergeDay,
+	staleKeys,
+} from './policy'
 
 const NAME = 'model-policy'
+const FLUSH_MS = 30_000
 const enabledAtom = atom({ plugin: 'model-policy', key: 'enabled' } as const, true)
 const usageAtom = atom({ plugin: 'model-policy', key: 'usage' } as const, {} as ModelPolicyUsage)
+const agentsAtom = atom({ plugin: 'model-policy', key: 'agents' } as const, {} as Record<string, string>)
+const daysAtom = atom({ plugin: 'model-policy', key: 'days' } as const, {} as Record<string, ModelPolicyDay>)
+
+// What the last flush wrote, so an idle timer tick writes nothing.
+let lastFlushed = ''
 
 // The tally counts input + output tokens as "tokens". Cache reads and writes are
 // kept apart as "cache", because they are billed and sized differently.
-function compact(n: number): string {
-	if (n < 1000) return String(n)
-	if (n < 1_000_000) return `${Math.round(n / 1000)}k`
-	return `${(n / 1_000_000).toFixed(1)}m`
-}
-
 function statusLine(enabled: boolean, usage: ModelPolicyUsage): string {
 	const parts = FAMILIES.filter(f => (usage[f]?.tokens ?? 0) > 0).map(f => `${f} ${compact(usage[f]?.tokens ?? 0)}`)
 	return [`policy ${enabled ? 'on' : 'off'}`, ...parts].join(' · ')
@@ -29,47 +46,159 @@ function table(enabled: boolean, usage: ModelPolicyUsage): string {
 		return `  ${f.padEnd(7)} ${compact(tokens).padStart(7)} tokens  ${String(pct).padStart(3)}%  cache ${compact(cache)}`
 	})
 	return [
-		`Model policy is ${enabled ? 'on' : 'off'} for this session. Use /model-policy on or /model-policy off.`,
+		`Model policy is ${enabled ? 'on' : 'off'} for this session. Use /model-policy on, off, or week.`,
 		rows.length > 0
 			? `Tokens this session (input + output; cache read + creation shown separately):\n${rows.join('\n')}`
 			: 'No turns counted yet.',
 	].join('\n')
 }
 
-// Hooks pass `$` to this declared function; the engine follows `$` only into top-level functions.
-async function refresh($: EngineInterface): Promise<void> {
-	const enabled = await read($, enabledAtom)
-	const usage = await read($, usageAtom)
-	$.ui.status(statusLine(enabled, usage))
+// The five-hour percent used, or undefined when the read fails or the window is absent.
+// A failed read fails open on purpose: with no reading no Workflow is held for confirmation.
+async function fiveHour($: EngineInterface): Promise<number | undefined> {
+	try {
+		return fiveHourPercent((await $.session.usage()).rateLimits)
+	} catch {
+		return undefined
+	}
 }
 
-export const register: Register = on => {
+// Hooks pass `$` to declared functions; the engine follows `$` only into top-level functions.
+async function refresh($: EngineInterface): Promise<void> {
+	$.ui.status(statusLine(await read($, enabledAtom), await read($, usageAtom)))
+}
+
+async function prune($: EngineInterface, today: string): Promise<void> {
+	for (const key of staleKeys(await $.store.keys(), today)) await $.store.delete(key)
+}
+
+// The session's tally lives in $.state, where `update` is atomic, so concurrent turns never overwrite
+// each other. This is the one place that copies it to $.store, under a key only this session writes.
+async function flush($: EngineInterface, sessionId: string): Promise<void> {
+	const days = await read($, daysAtom)
+	const signature = sessionId + JSON.stringify(days)
+	if (signature === lastFlushed) return
+	for (const [date, log] of Object.entries(days)) await $.store.set(dayStoreKey(date, sessionId), log)
+	lastFlushed = signature
+	await prune($, dayKey(await $.clock.now()))
+}
+
+// The timer's callback. A failed flush must not stop the interval.
+async function tick($: EngineInterface): Promise<void> {
+	try {
+		await flush($, await $.session.id())
+	} catch {
+		// The next tick tries again.
+	}
+}
+
+async function week($: EngineInterface): Promise<string> {
+	await flush($, await $.session.id())
+	const today = dayKey(await $.clock.now())
+	const days: Record<string, ModelPolicyDay> = {}
+	for (const key of await $.store.keys()) {
+		const date = dateOfKey(key)
+		const log = date === undefined ? undefined : ((await $.store.get(key)) as ModelPolicyDay | undefined)
+		if (date !== undefined && log) days[date] = mergeDay(days[date] ?? emptyDay(), log)
+	}
+	return formatWeek(today, days)
+}
+
+// A copy that `update` may change: its callback can run again on a version miss.
+function copyDays(all: Record<string, ModelPolicyDay>): Record<string, ModelPolicyDay> {
+	return JSON.parse(JSON.stringify(all)) as Record<string, ModelPolicyDay>
+}
+
+export const register: Register = (on, options) => {
+	const mechanicModel = String(options.mechanicModel ?? 'haiku')
+	const confirmAt = Number(options.workflowConfirmAtPercent ?? 95)
+
 	on('session.start', async ($, e, next) => {
 		await $.command.register({
 			name: NAME,
-			description: 'Show or toggle the Opus/Sonnet model policy: /model-policy [on|off]',
+			description: 'Show or toggle the model policy: /model-policy [on|off|week]',
 		})
+		await prune($, dayKey(await $.clock.now()))
 		await refresh($)
+		$.clock.every(FLUSH_MS, () => void tick($))
+		return next(e)
+	})
+
+	// /clear ends the conversation without a session.start after it. Flush the old session's
+	// tally under its own id, then start the next one from zero. next(e) comes last and fast.
+	on('session.end', async ($, e, next) => {
+		if (e.reason === 'clear') {
+			try {
+				await flush($, e.sessionId)
+				await update($, daysAtom, () => ({}))
+				await update($, usageAtom, () => ({}))
+				await update($, agentsAtom, () => ({}))
+				lastFlushed = ''
+				await refresh($)
+			} catch {
+				// Ending the session matters more than the tally.
+			}
+		} else {
+			try {
+				await flush($, e.sessionId)
+			} catch {
+				// Same.
+			}
+		}
 		return next(e)
 	})
 
 	on('command.run', { command: NAME }, async ($, e) => {
 		const arg = e.args.trim().toLowerCase()
+		if (arg === 'week') return { text: await week($) }
 		if (arg === 'on' || arg === 'off') await update($, enabledAtom, () => arg === 'on')
-		else if (arg !== '') return { text: 'Usage: /model-policy [on|off]' }
+		else if (arg !== '') return { text: 'Usage: /model-policy [on|off|week]' }
 		await refresh($)
 		return { text: table(await read($, enabledAtom), await read($, usageAtom)) }
 	})
 
 	on('agent.spawn', async ($, e, next) => {
-		// A resume (SendMessage to an existing agent) can only be refused, and a rewrite is logged as a failure. Leave it alone.
+		// A resume can only be refused and a rewrite is logged as a failure, so it passes untouched.
 		if (e.resume !== undefined || !(await read($, enabledAtom))) return next(e)
-		const decision = decideSpawn(e)
+		const decision = decideSpawn(e, { mechanicModel })
 		if ('deny' in decision) return { deny: decision.deny }
-		if ('model' in decision) return next({ ...e, model: decision.model })
-		return next(e)
+		const ran = 'model' in decision ? await next({ ...e, model: decision.model }) : await next(e)
+		if ('deny' in ran) return ran
+		// Logging must never change the spawn. A failure here only loses a log line.
+		try {
+			if (ran.agentId !== undefined) {
+				const id = ran.agentId
+				const type = e.subagentType
+				const date = dayKey(await $.clock.now())
+				await update($, agentsAtom, all => ({ ...all, [id]: type }))
+				await update($, daysAtom, all => {
+					const copy = copyDays(all)
+					copy[date] = addSpawn(copy[date] ?? emptyDay(), type, family(ran.model))
+					return copy
+				})
+			}
+		} catch {
+			// Fall through.
+		}
+		return ran
 	}).catch(($, e, next) =>
 		next.called ? next(e) : { deny: `${NAME}: the spawn check failed, so the spawn is refused.` },
+	)
+
+	on('tool.check', { tool: 'Workflow' }, async ($, e, next) => {
+		// The verdict beneath comes first: a deny there stays a deny.
+		const verdict = await next(e)
+		if (verdict.decision === 'deny') return verdict
+		if (e.agentId !== undefined || !(await read($, enabledAtom))) return verdict
+		const percent = await fiveHour($)
+		if (percent === undefined || percent < confirmAt) return verdict
+		// An ask puts the call to the person, who sees this reason in the permission prompt.
+		return {
+			decision: 'ask',
+			reason: `Model policy: the 5-hour usage limit is at ${Math.round(percent)}%. A Workflow starts many agents. Confirm to start it.`,
+		}
+	}).catch(($, e, next) =>
+		next.called ? next(e) : { decision: 'deny', reason: `${NAME}: the Workflow check failed, so the call is refused.` },
 	)
 
 	on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
@@ -78,7 +207,8 @@ export const register: Register = on => {
 		const path = 'notebook_path' in e ? e.notebook_path : e.file_path
 		// HOME is the user's home on macOS and Linux, USERPROFILE on Windows.
 		const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
-		if (mainSessionMayWrite(path, home, await $.session.cwd())) return next(e)
+		const tmpdir = (await $.env.get('TMPDIR')) ?? ''
+		if (mainSessionMayWrite(path, home, await $.session.cwd(), tmpdir)) return next(e)
 		return {
 			deny:
 				`Model policy: the main session plans and reviews, it does not write code. ` +
@@ -91,11 +221,13 @@ export const register: Register = on => {
 
 	on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
 		if (e.agentId !== undefined || !(await read($, enabledAtom))) return next(e)
-		if (!isFileWrite(e.command)) return next(e)
+		const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
+		const tmpdir = (await $.env.get('TMPDIR')) ?? ''
+		if (!isFileWrite(e.command, { home, cwd: await $.session.cwd(), tmpdir })) return next(e)
 		return {
 			deny:
 				`Model policy: the main session does not write code, including through the shell ` +
-				`(sed -i, redirects, tee, patches). Delegate this change to the model-policy:coder agent ` +
+				`(sed -i, redirects, tee, cp, mv, patches). Delegate this change to the model-policy:coder agent ` +
 				`with a precise spec. Blocked command: ${e.command.slice(0, 200)}`,
 		}
 	}).catch(($, e, next) =>
@@ -108,9 +240,16 @@ export const register: Register = on => {
 			const f = family(usage.model)
 			const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
 			const cache = (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+			const date = dayKey(await $.clock.now())
+			const type = e.agentId === undefined ? undefined : (await read($, agentsAtom))[e.agentId]
 			await update($, usageAtom, all => {
 				const prev = all[f] ?? { tokens: 0, cache: 0 }
 				return { ...all, [f]: { tokens: prev.tokens + tokens, cache: prev.cache + cache } }
+			})
+			await update($, daysAtom, all => {
+				const copy = copyDays(all)
+				copy[date] = addTurn(copy[date] ?? emptyDay(), f, tokens, cache, type)
+				return copy
 			})
 			await refresh($)
 		}

@@ -5,11 +5,15 @@ import {
   bar,
   completed,
   denied,
+  envLine,
   family,
+  hasRunning,
+  friendlyModel,
   formatDuration,
   formatReset,
   formatTokens,
   order,
+  parseGitStatus,
   resumed,
   resolved,
   severity,
@@ -68,6 +72,15 @@ describe('reducers', () => {
     expect(rows[0]?.tokens).toBe(40)
     expect(rows[0]?.status).toBe('done')
     expect(rows[0]?.model).toBe('claude-haiku-4')
+  })
+})
+
+describe('spawn without an agent id', () => {
+  test('the row stops running at once', async () => {
+    const rows = resolved(spawn([], 'a', 10), 'a', undefined, 'claude-opus-5-5', 50)
+    expect(rows[0]?.status).toBe('untracked')
+    expect(rows[0]?.endedAt).toBe(50)
+    expect(hasRunning(rows)).toBe(false)
   })
 })
 
@@ -214,5 +227,94 @@ describe('formatting', () => {
         ],
       }),
     ).toBe('5h 23% · 7d 41% · ctx 38%')
+  })
+})
+
+describe('git status', () => {
+  const head = (name: string, oid = 'abcdef1234567890') =>
+    `# branch.oid ${oid}\n# branch.head ${name}\n# branch.upstream origin/${name}\n# branch.ab +0 -0\n`
+
+  test('clean branch', async () => {
+    expect(parseGitStatus(0, head('main'))).toEqual({ branch: 'main', dirty: false })
+  })
+
+  test('dirty: modified, renamed, unmerged and untracked all count', async () => {
+    expect(parseGitStatus(0, `${head('main')}1 .M N... 100644 100644 100644 a b x.ts\n`)?.dirty).toBe(true)
+    expect(parseGitStatus(0, `${head('main')}2 R. N... 1 1 1 a b R100 new\told\n`)?.dirty).toBe(true)
+    expect(parseGitStatus(0, `${head('main')}u UU N... 1 1 1 1 a b c x\n`)?.dirty).toBe(true)
+    expect(parseGitStatus(0, `${head('main')}? new.txt\n`)?.dirty).toBe(true)
+  })
+
+  test('ignored files do not make it dirty', async () => {
+    expect(parseGitStatus(0, `${head('main')}! dist/\n`)?.dirty).toBe(false)
+  })
+
+  test('detached shows a short hash', async () => {
+    expect(parseGitStatus(0, head('(detached)'))).toEqual({ branch: 'abcdef1', dirty: false })
+  })
+
+  test('initial commit keeps the branch name', async () => {
+    expect(
+      parseGitStatus(0, '# branch.oid (initial)\n# branch.head main\n? a\n'),
+    ).toEqual({ branch: 'main', dirty: true })
+  })
+
+  test('not a repository', async () => {
+    expect(parseGitStatus(128, '')).toBeUndefined()
+    expect(parseGitStatus(0, '')).toBeUndefined()
+  })
+})
+
+describe('friendlyModel', () => {
+  test('known families', async () => {
+    expect(friendlyModel('claude-opus-5-5')).toBe('Opus 5.5')
+    expect(friendlyModel('claude-sonnet-5-5')).toBe('Sonnet 5.5')
+    expect(friendlyModel('claude-haiku-4-5')).toBe('Haiku 4.5')
+    expect(friendlyModel('claude-fable-1')).toBe('Fable 1')
+  })
+
+  test('dated, old-style, alias and suffixed ids', async () => {
+    expect(friendlyModel('claude-opus-4-20250514')).toBe('Opus 4')
+    expect(friendlyModel('claude-3-5-haiku-20241022')).toBe('Haiku 3.5')
+    expect(friendlyModel('sonnet')).toBe('Sonnet')
+    expect(friendlyModel('claude-opus-5-5[1m]')).toBe('Opus 5.5')
+  })
+
+  test('unknown ids pass through', async () => {
+    expect(friendlyModel('gpt-x')).toBe('gpt-x')
+  })
+})
+
+describe('status line with environment', () => {
+  const usage = {
+    startedAt: 0,
+    contextWindow: 1,
+    contextPercent: 38,
+    limits: [{ kind: 'five_hour', percent: 23 }, { kind: 'seven_day', percent: 41 }],
+  }
+  const env = { folder: 'repo', branch: 'main', dirty: true, model: 'Opus 5.5', gitAt: 0 }
+
+  test('every segment', async () => {
+    expect(statusLine(usage, env)).toBe(
+      'repo \u00b7 main* \u00b7 Opus 5.5 \u00b7 5h 23% \u00b7 7d 41% \u00b7 ctx 38%',
+    )
+  })
+
+  test('clean branch has no star, no repo drops the branch', async () => {
+    expect(statusLine(usage, { ...env, dirty: false })).toContain('repo \u00b7 main \u00b7 Opus')
+    expect(statusLine(usage, { ...env, branch: undefined })).toBe(
+      'repo \u00b7 Opus 5.5 \u00b7 5h 23% \u00b7 7d 41% \u00b7 ctx 38%',
+    )
+  })
+
+  test('each of folder and model can be missing', async () => {
+    expect(statusLine(usage, { ...env, folder: undefined })).toMatch(/^main\* \u00b7 Opus 5.5/)
+    expect(statusLine(usage, { ...env, model: undefined })).toMatch(/^repo \u00b7 main\* \u00b7 5h/)
+    expect(envLine({ dirty: false, gitAt: 0 })).toBe('')
+    expect(envLine(null)).toBe('')
+  })
+
+  test('no usage segments and no env gives an empty line', async () => {
+    expect(statusLine({ ...usage, limits: [], contextPercent: undefined })).toBe('')
   })
 })

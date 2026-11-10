@@ -5,6 +5,8 @@ description: "Use to review a diff or PR for real bugs. Parallel agents find bug
 
 # PR review
 
+The main session runs this skill and spawns every reviewer itself. A subagent can't start agents of its own, so never hand this whole skill to one agent. Each finder and verifier is a fresh-context `model-policy:reviewer` agent, as the `model-roles` skill describes.
+
 Catching real bugs comes first. Reducing review rounds comes second. Noise is expensive. When an agent wrote the change, every nit costs another commit and another round.
 
 ## Inputs
@@ -20,7 +22,7 @@ Collect these before you review:
 
 Pick a depth from the risk of the change, or use the depth the user names.
 
-- Quick. You review in one pass. Use it for docs, copy, and small low-risk changes.
+- Quick. One reviewer agent reviews in one pass, with every lens. Use it for docs, copy, and small low-risk changes.
 - Standard. Three finder agents, then one verifier per finding. This is the default.
 - Deep. Five finder agents, then three verifiers per finding. Use it for auth, billing, data migrations, CI workflows, installers, and code where one missed bug is costly.
 
@@ -35,7 +37,7 @@ Read the intent. Read the code around the diff, including callers of changed fun
 
 ## Phase 2. Find candidate bugs in parallel
 
-Spawn finder subagents at the same time. Use the `model-policy:reviewer` agent type so they run on Opus under the `model-roles` skill. If that type isn't available, start each description with `review`, for example `review: logic lens`. Give each one the diff, the intent, and one lens:
+Spawn the finder agents at the same time. Give each one the diff, the intent, and one lens:
 
 1. Logic and edge cases. Off-by-one errors, null or empty input, wrong conditions, unhandled states.
 2. Integration. Callers, contracts, and schemas that the change breaks.
@@ -49,7 +51,7 @@ Each candidate needs a file and line, the defect in one sentence, and a concrete
 
 ## Phase 3. Verify
 
-For each candidate, spawn verifier subagents with fresh context. Use `model-policy:reviewer` for them too. Give them the finding and access to the code. Do not give them the finder's reasoning. Each verifier votes CONFIRMED, REFUTED, or UNSURE with a one-line reason.
+Merge duplicate candidates first. Then, for each candidate, spawn verifier agents with fresh context. Give them the finding and access to the code. Do not give them the finder's reasoning. Each verifier votes CONFIRMED, REFUTED, or UNSURE with a one-line reason.
 
 Keep a finding only if a majority votes CONFIRMED. With one verifier, keep it only if that verifier votes CONFIRMED.
 

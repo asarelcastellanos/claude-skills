@@ -8,7 +8,7 @@
 		{
 			"name": "model-policy",
 			"source": "./mods/model-policy",
-			"description": "Opus plans, supervises, and reviews. Sonnet writes code and runs every subagent task except review."
+			"description": "Opus runs only in the main session. Subagents run on Sonnet at most, and on Haiku for lookups and mechanical edits."
 		},
 		{
 			"name": "session-monitor",

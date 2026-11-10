@@ -1,4 +1,4 @@
-import type { AgentRow, UsageSnapshot } from '../types'
+import type { AgentRow, EnvInfo, UsageSnapshot } from '../types'
 
 /** Rows kept in state. Running rows are never dropped. */
 export const MAX_KEPT = 30
@@ -58,9 +58,15 @@ export const resolved = (
   key: string,
   agentId: string | undefined,
   model: string | undefined,
+  now = 0,
 ): AgentRow[] => {
+  // No agent id: no turn.complete can ever match, so the row cannot stay running.
   if (agentId === undefined) {
-    return rows.map(r => (r.key === key ? { ...r, model: model ?? r.model } : r))
+    return rows.map(r =>
+      r.key === key
+        ? { ...r, model: model ?? r.model, status: 'untracked', endedAt: now }
+        : r,
+    )
   }
   const early = rows.find(r => r.id === agentId && r.key !== key)
   return rows
@@ -231,14 +237,90 @@ export const limitLabel = (kind: string): string =>
 
 const pct = (n: number): string => `${Math.round(n)}%`
 
+export type GitInfo = { branch: string; dirty: boolean }
+
+/** Minimum gap between two git runs, in milliseconds. */
+export const GIT_MIN_GAP_MS = 5000
+
+/**
+ * Parse `git status --porcelain=v2 --branch`. Returns undefined when git failed
+ * (not a repository) or printed no branch header.
+ */
+export const parseGitStatus = (
+  exitCode: number,
+  stdout: string,
+): GitInfo | undefined => {
+  if (exitCode !== 0) return undefined
+  let head: string | undefined
+  let oid: string | undefined
+  let dirty = false
+  for (const line of stdout.split('\n')) {
+    if (line.startsWith('# branch.head ')) head = line.slice(14).trim()
+    else if (line.startsWith('# branch.oid ')) oid = line.slice(13).trim()
+    else if (/^[12u?] /.test(line)) dirty = true
+  }
+  if (head === undefined || head === '') return undefined
+  if (head === '(detached)') {
+    const hash = oid === undefined || oid === '(initial)' ? '' : oid.slice(0, 7)
+    return hash === '' ? undefined : { branch: hash, dirty }
+  }
+  return { branch: head, dirty }
+}
+
+const MODEL_NAMES: Record<string, string> = {
+  opus: 'Opus',
+  sonnet: 'Sonnet',
+  haiku: 'Haiku',
+  fable: 'Fable',
+}
+
+const titleCase = (s: string): string => `${s.slice(0, 1).toUpperCase()}${s.slice(1)}`
+
+/** claude-opus-5-5 becomes "Opus 5.5". Unknown ids pass through. */
+export const friendlyModel = (id: string): string => {
+  const clean = id.replace(/\[[^\]]*\]$/, '').trim()
+  const lower = clean.toLowerCase()
+  const fam = /(opus|sonnet|haiku|fable)/.exec(lower)?.[1]
+  if (fam === undefined) return id
+  const name = MODEL_NAMES[fam] ?? titleCase(fam)
+  // claude-opus-5-5, claude-opus-4-20250514, claude-opus-4
+  const after = new RegExp(`${fam}-(\\d+)(?:-(\\d{1,2}))?(?!\\d)`).exec(lower)
+  // claude-3-5-haiku-20241022
+  const before = new RegExp(`claude-(\\d+)(?:-(\\d+))?-${fam}`).exec(lower)
+  const m = before ?? after
+  if (m === null) return name
+  return m[2] === undefined ? `${name} ${m[1]}` : `${name} ${m[1]}.${m[2]}`
+}
+
+/** `<folder> · <branch><*> · <model>`, leaving out what is unknown. */
+export const envLine = (env: EnvInfo | null | undefined): string => {
+  if (env === null || env === undefined) return ''
+  const parts: string[] = []
+  if (env.folder) parts.push(env.folder)
+  if (env.branch) parts.push(`${env.branch}${env.dirty ? '*' : ''}`)
+  if (env.model) parts.push(env.model)
+  return parts.join(' \u00b7 ')
+}
+
 /** The compact line for `$.ui.status`. */
-export const statusLine = (u: UsageSnapshot): string => {
-  const parts = u.limits.map(l => `${limitLabel(l.kind)} ${pct(l.percent)}`)
+export const statusLine = (u: UsageSnapshot, env?: EnvInfo | null): string => {
+  const parts: string[] = []
+  const head = envLine(env)
+  if (head !== '') parts.push(head)
+  for (const l of u.limits) parts.push(`${limitLabel(l.kind)} ${pct(l.percent)}`)
   if (u.contextPercent !== undefined) parts.push(`ctx ${pct(u.contextPercent)}`)
-  return parts.join(' · ')
+  return parts.join(' \u00b7 ')
 }
 
 export const symbol = (s: AgentRow['status']): string =>
-  s === 'running' ? '>' : s === 'done' ? '+' : s === 'failed' ? 'x' : '!'
+  s === 'running'
+    ? '>'
+    : s === 'done'
+      ? '+'
+      : s === 'failed'
+        ? 'x'
+        : s === 'untracked'
+          ? '?'
+          : '!'
 
 export const statusWord = (s: AgentRow['status']): string => s

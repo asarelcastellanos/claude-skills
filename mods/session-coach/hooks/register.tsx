@@ -10,6 +10,7 @@ import {
   isIdle,
   parseVerdict,
   recentUserPrompts,
+  effectiveCap,
   recordSpawn,
   shouldCheckContext,
 } from './coach'
@@ -71,6 +72,7 @@ export const register: Register = (on, options) => {
   const idleMinutes = Number(options.idleMinutes ?? 30)
   const useModelCheck = options.useModelCheck !== false
   const cap = Number(options.workflowAgentCap ?? 12)
+  const tightenAt = Number(options.tightenAtPercent ?? 80)
   const cfg: Config = { minPercent, idleMinutes, useModelCheck }
 
   // Bumped on every submit so a slow check for an older prompt drops its result.
@@ -131,8 +133,19 @@ export const register: Register = (on, options) => {
     let nextTotal = 0
     const runId = e.workflow?.runId
 
+    let runCap = cap
+    let tightenedAt: number | null = null
+    if (runId !== undefined && cap > 0) {
+      try {
+        const { rateLimits } = await $.session.usage()
+        ;({ cap: runCap, tightenedAt } = effectiveCap(cap, tightenAt, rateLimits))
+      } catch {
+        // A failed usage read uses the normal cap.
+      }
+    }
+
     await update($, coach, (s: CoachState) => {
-      const run = runId === undefined ? null : recordSpawn(s.runs, runId, cap)
+      const run = runId === undefined ? null : recordSpawn(s.runs, runId, runCap)
       allowed = run === null || run.allowed
       count = run?.count ?? 0
       prevTotal = s.agentTotal
@@ -146,8 +159,13 @@ export const register: Register = (on, options) => {
     })
 
     if (!allowed) {
+      const why =
+        tightenedAt === null
+          ? ''
+          : ` The cap was halved from ${cap} because the 5-hour limit is at ${tightenedAt}%.`
+
       return {
-        deny: `The workflow agent cap of ${cap} for this run is reached (${count} agents started). Finish the run with the agents already started. The user can raise workflowAgentCap in /config.`,
+        deny: `The workflow agent cap of ${runCap} for this run is reached (${count} agents started).${why} Finish the run with the agents already started. The user can raise workflowAgentCap in /config.`,
       }
     }
 

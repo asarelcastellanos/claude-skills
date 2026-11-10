@@ -1,16 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRow, UsageSnapshot } from '../types'
+import type { AgentRow, EnvInfo, UsageSnapshot } from '../types'
 import {
   bar,
   completed,
   denied,
+  envLine,
   family,
+  friendlyModel,
+  GIT_MIN_GAP_MS,
   formatDuration,
   formatReset,
   formatTokens,
   hasRunning,
+  parseGitStatus,
   limitLabel,
   resolved,
   resumed,
@@ -36,6 +40,9 @@ const agents = atom({ plugin: 'session-monitor', key: 'agents' } as const, [], {
 const usage = atom({ plugin: 'session-monitor', key: 'usage' } as const, null, {
   shape: 'usage-1',
 })
+const env = atom({ plugin: 'session-monitor', key: 'env' } as const, null, {
+  shape: 'env-1',
+})
 const clock = atom({ plugin: 'session-monitor', key: 'now' } as const, 0)
 
 const COLOR: Record<Severity, string | undefined> = {
@@ -49,14 +56,54 @@ const STATUS_COLOR: Record<AgentRow['status'], string | undefined> = {
   done: 'green',
   failed: 'red',
   denied: 'yellow',
+  untracked: undefined,
 }
 
 // A reload runs register in a fresh environment and drops the previous
 // environment's timers (reference.md, "Developing one"), so neither this
 // handle nor the 10 s usage timer doubles. The next spawn starts a new tick.
 let ticker: { cancel: () => void } | undefined
+let isGitRunning = false
+
+/** Folder, branch and model. Git runs at most once per GIT_MIN_GAP_MS. */
+async function refreshEnv($: EngineInterface): Promise<EnvInfo> {
+  const before = await read($, env)
+  const now = await $.clock.now()
+  const cwd = await $.session.cwd()
+  const folder = cwd.split(/[\\/]/).filter(Boolean).pop()
+  let model: string | undefined = before?.model
+  try {
+    model = friendlyModel(await $.session.model())
+  } catch {}
+  let { branch, dirty, gitAt } = before ?? { branch: undefined, dirty: false, gitAt: 0 }
+  if (!isGitRunning && now - gitAt >= GIT_MIN_GAP_MS) {
+    isGitRunning = true
+    try {
+      const ran = await $.process.run(
+        ['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch'],
+        { cwd, timeoutMs: 2000 },
+      )
+      const info = parseGitStatus(ran.exitCode, ran.stdout)
+      branch = info?.branch
+      dirty = info?.dirty ?? false
+    } catch {
+      branch = undefined
+      dirty = false
+    } finally {
+      isGitRunning = false
+      gitAt = now
+    }
+  }
+  const next: EnvInfo = { folder, branch, dirty, model, gitAt }
+  if (JSON.stringify(before) !== JSON.stringify(next)) {
+    await update($, env, () => next)
+  }
+
+  return next
+}
 
 async function refreshUsage($: EngineInterface): Promise<void> {
+  const info = await refreshEnv($).catch(() => null)
   const u = await $.session.usage()
   const snap: UsageSnapshot = {
     startedAt: u.startedAt,
@@ -74,7 +121,14 @@ async function refreshUsage($: EngineInterface): Promise<void> {
   if (JSON.stringify(before) !== JSON.stringify(snap)) {
     await update($, usage, () => snap)
   }
-  $.ui.status(statusLine(snap) || undefined)
+  $.ui.status(statusLine(snap, info) || undefined)
+}
+
+/** Refresh outside the event's time bound. Git never runs inside a hook. */
+function refreshLater($: EngineInterface): void {
+  $.clock.after(0, () => {
+    refreshUsage($).catch(() => {})
+  })
 }
 
 async function isPaneVisible($: EngineInterface): Promise<boolean> {
@@ -109,7 +163,7 @@ export const register: Register = on => {
       description: 'Open the session monitor pane (/monitor close closes it)',
     })
     void $.ui.open({ id: PANE, title: 'Monitor' })
-    await refreshUsage($)
+    refreshLater($)
     $.clock.every(USAGE_MS, () => void refreshUsage($))
 
     return next(e)
@@ -183,7 +237,10 @@ export const register: Register = on => {
         await update($, agents, rows => denied(rows, key, at))
       } else {
         const { agentId, model } = result
-        await update($, agents, rows => resolved(rows, key, agentId, model))
+        const at = await $.clock.now()
+        await update($, agents, rows =>
+          resolved(rows, key, agentId, model, at),
+        )
       }
     } catch {}
 
@@ -194,8 +251,8 @@ export const register: Register = on => {
     if (e.reason === 'clear') {
       try {
         await update($, agents, () => [])
-        await refreshUsage($)
       } catch {}
+      refreshLater($)
     }
 
     return next(e)
@@ -216,7 +273,8 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const ran = await next(e)
-    if (e.agentId !== undefined) {
+    try {
+      if (e.agentId !== undefined) {
       const id = e.agentId
       const now = await $.clock.now()
       const u = e.usage
@@ -229,8 +287,9 @@ export const register: Register = on => {
       await update($, agents, rows =>
         completed(rows, id, e.reason, tokens, now),
       )
-    }
-    await refreshUsage($)
+      }
+    } catch {}
+    refreshLater($)
 
     return ran
   })
@@ -239,6 +298,8 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     const rows = await read($, agents)
     const snap = await read($, usage)
+    const info = await read($, env)
+    const header = envLine(info)
     await read($, clock)
     const now = await $.clock.now()
     const cols = Math.max(10, e.props.bodyColumns)
@@ -246,7 +307,7 @@ export const register: Register = on => {
     const barWidth = cols >= 34 ? 10 : 6
 
     const limits = snap?.limits ?? []
-    const fixed = 7 + Math.max(1, limits.length)
+    const fixed = 7 + Math.max(1, limits.length) + (header === '' ? 0 : 1)
     const { shown, hidden } = visible(rows, height - fixed - 1, 2)
     const running = rows.filter(r => r.status === 'running').length
 
@@ -258,6 +319,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
+        {header !== '' && line(header, 'blue')}
         {line('Session', undefined, true)}
         {snap === null
           ? line('no data yet', undefined, true)
@@ -300,6 +362,7 @@ export const register: Register = on => {
               {line(
                 `${symbol(r.status)} ${r.description}${tag}`,
                 STATUS_COLOR[r.status],
+                r.status === 'untracked',
               )}
               {line(`  ${meta.join(' · ')}`, undefined, true)}
             </Box>
