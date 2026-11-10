@@ -1,13 +1,13 @@
 ---
 name: "pr-review"
-description: "Use to review a diff or PR for real bugs. Parallel agents find bugs, separate agents verify them, and re-reviews stop after three rounds."
+description: "Use to review a diff or PR for real bugs. Parallel agents find bugs, separate agents verify them, and each PR gets one review before it goes to main."
 ---
 
 # PR review
 
 The main session runs this skill and spawns every reviewer itself. A subagent can't start agents of its own, so never hand this whole skill to one agent. Each finder and verifier is a fresh-context `model-policy:reviewer` agent, as the `model-roles` skill describes. Spawn them with the Agent tool. Use a Workflow only when the user asks for one.
 
-Catching real bugs comes first. Reducing review rounds comes second. Noise is expensive. When an agent wrote the change, every nit costs another commit and another round.
+Catching real bugs comes first. Keeping noise out comes second. When an agent wrote the change, every nit costs another commit.
 
 ## Inputs
 
@@ -16,7 +16,6 @@ Collect these before you review:
 - The diff against the base branch.
 - The intent, from the PR description, the linked issue, or what the user asked for.
 - The repo's CLAUDE.md and REVIEW.md, if they exist. REVIEW.md rules override the defaults in this skill.
-- The round number. Round 1 is the first review of this change.
 
 ## Depth
 
@@ -73,11 +72,9 @@ Open with the count, for example "2 important, 1 nit, 1 pre-existing." If nothin
 
 List the findings sorted by severity. For each one, give the tag, the file and line, the defect, the failure scenario, and a suggested fix.
 
-## Re-review rules
+## One review per PR
 
-- From round 2 on, review only what changed since the last review.
-- Never repeat a finding from an earlier round, whether the author fixed it or rejected it with a reason.
-- After round 3, if Important findings remain, stop listing new findings. Tell the author the approach may be wrong and ask them to reconsider it, or escalate to the user.
+A change gets one review, on the full diff, just before the PR into the default branch. Fixes for its findings rerun the checks, not the review. Review again only when the user asks, for example after a fix that changed the approach. A second review covers only what changed since the first and never repeats an earlier finding.
 
 ## If the repo has no REVIEW.md
 

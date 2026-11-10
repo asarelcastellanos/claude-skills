@@ -55,6 +55,7 @@ A one-line change can skip the body.
 
 ## Changes
 - <bullet>
+- Closes #<issue>, one line per issue the PR solves
 
 ## Testing
 - <what you ran or checked, with the command>
