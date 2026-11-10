@@ -13,7 +13,7 @@
 		{
 			"name": "session-monitor",
 			"source": "./mods/session-monitor",
-			"description": "Sidebar pane showing subagents, subscription usage, context fill, cost and session time, plus a compact status line."
+			"description": "Sidebar pane showing the folder, branch and model, subagents, subscription usage, context fill, cost and session time, and the model-policy tally when that mod is installed."
 		},
 		{
 			"name": "session-coach",
