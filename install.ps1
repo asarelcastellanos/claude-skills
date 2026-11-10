@@ -37,7 +37,7 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
 	claude plugin marketplace add $repo --scope user | Out-Null
 	if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 	foreach ($mod in Get-ChildItem (Join-Path $repo "mods") -Directory) {
-		claude plugin install "$($mod.Name)@asarel-claude-skills" --scope user | Out-Null
+		claude plugin install "$($mod.Name)@claude-workbench" --scope user | Out-Null
 		if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 		Write-Output "installed the $($mod.Name) mod"
 	}

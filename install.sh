@@ -44,7 +44,7 @@ if command -v claude >/dev/null 2>&1; then
 	claude plugin marketplace add "$repo" --scope user >/dev/null
 	for mod in "$repo"/mods/*/; do
 		name="$(basename "$mod")"
-		claude plugin install "$name@asarel-claude-skills" --scope user >/dev/null
+		claude plugin install "$name@claude-workbench" --scope user >/dev/null
 		echo "installed the $name mod"
 	done
 else
