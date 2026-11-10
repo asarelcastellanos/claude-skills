@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ModelPolicyDay, ModelPolicyUsage } from '../types'
+import type { ModelPolicyDay, ModelPolicyPick, ModelPolicyUsage } from '../types'
 import {
 	FAMILIES,
+	PICK_LABELS,
 	addSpawn,
 	addTurn,
 	compact,
@@ -18,6 +19,7 @@ import {
 	isFileWrite,
 	mainSessionMayWrite,
 	mergeDay,
+	pickFromAnswer,
 	staleKeys,
 } from './policy'
 
@@ -27,6 +29,7 @@ const enabledAtom = atom({ plugin: 'model-policy', key: 'enabled' } as const, tr
 const usageAtom = atom({ plugin: 'model-policy', key: 'usage' } as const, {} as ModelPolicyUsage)
 const agentsAtom = atom({ plugin: 'model-policy', key: 'agents' } as const, {} as Record<string, string>)
 const daysAtom = atom({ plugin: 'model-policy', key: 'days' } as const, {} as Record<string, ModelPolicyDay>)
+const pickedAtom = atom({ plugin: 'model-policy', key: 'picked' } as const, null as ModelPolicyPick | null)
 
 // What the last flush wrote, so an idle timer tick writes nothing.
 let lastFlushed = ''
@@ -96,6 +99,22 @@ async function week($: EngineInterface): Promise<string> {
 	return formatWeek(today, days)
 }
 
+// Asks which main model to use and switches to it. Closing the question, a -p run, and any failure
+// leave the model as it is. It never throws, so nothing waits on it and nothing breaks if it fails.
+async function askModel($: EngineInterface): Promise<void> {
+	try {
+		// A session that already has prompts was resumed, so it keeps its own model.
+		if ((await $.session.turns()) > 0) return
+		const answer = await $.ui.ask('Which model should this session use?', { options: PICK_LABELS, header: 'Model' })
+		const pick = pickFromAnswer(answer)
+		if (pick === undefined) return
+		await $.command.run({ command: 'model', args: pick })
+		await update($, pickedAtom, () => pick)
+	} catch {
+		// Dismissed, no one to ask, or the switch failed: keep the current model.
+	}
+}
+
 // A copy that `update` may change: its callback can run again on a version miss.
 function copyDays(all: Record<string, ModelPolicyDay>): Record<string, ModelPolicyDay> {
 	return JSON.parse(JSON.stringify(all)) as Record<string, ModelPolicyDay>
@@ -104,6 +123,7 @@ function copyDays(all: Record<string, ModelPolicyDay>): Record<string, ModelPoli
 export const register: Register = (on, options) => {
 	const mechanicModel = String(options.mechanicModel ?? 'haiku')
 	const confirmAt = Number(options.workflowConfirmAtPercent ?? 95)
+	const askAtStart = options.askModelAtStart !== false
 
 	on('session.start', async ($, e, next) => {
 		await $.command.register({
@@ -120,6 +140,8 @@ export const register: Register = (on, options) => {
 		} catch {
 			// The first turn writes `usage` again.
 		}
+		// The dialog waits on the person, so it is not awaited: the session starts without it.
+		if (askAtStart) void askModel($)
 		return next(e)
 	})
 
@@ -147,6 +169,8 @@ export const register: Register = (on, options) => {
 				})
 				await update($, usageAtom, () => ({}))
 				await update($, agentsAtom, () => ({}))
+				// A clear keeps the model, so it keeps the pick. A resumed session brings its own model.
+				if (e.reason === 'resume') await update($, pickedAtom, () => null)
 				lastFlushed = ''
 			} catch {
 				// Fall through to the write: the old tally still belongs to the ending session.
@@ -174,7 +198,8 @@ export const register: Register = (on, options) => {
 	on('agent.spawn', async ($, e, next) => {
 		// A resume can only be refused and a rewrite is logged as a failure, so it passes untouched.
 		if (e.resume !== undefined || !(await read($, enabledAtom))) return next(e)
-		const decision = decideSpawn(e, { mechanicModel })
+		const mainPick = (await read($, pickedAtom)) ?? undefined
+		const decision = decideSpawn(e, { mechanicModel, mainPick })
 		if ('deny' in decision) return { deny: decision.deny }
 		const ran = 'model' in decision ? await next({ ...e, model: decision.model }) : await next(e)
 		if ('deny' in ran) return ran

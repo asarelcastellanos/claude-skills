@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { dayKey, decideSpawn, family, isFileWrite, mainSessionMayWrite } from './policy'
+import { PICK_LABELS, dayKey, decideSpawn, family, isFileWrite, mainSessionMayWrite, pickFromAnswer } from './policy'
 
 // Beneath the plugin the engine's own spawn answers with the model it was given.
 function engineSpawn(on: On) {
@@ -896,3 +896,178 @@ test('session.end: a flush during the reset window is skipped', async ($, on) =>
 	expect((await slash($, 'week')).text).toMatch(/sonnet\s+150 tokens/)
 	expect([...world.kv.keys()].sort()).toEqual([`day-${dayKey(NOON)}-s1`, `day-${dayKey(NOON)}-s2`])
 })
+
+// The engine's own answers for the start-of-session question and the /model switch.
+// Call it before engineTools: the first hook registered answers first.
+function enginePicker(on: On, answer: string | Error) {
+	const world = { asked: [] as Array<{ questions: Array<{ question: string; header: string; options: Array<{ label: string }> }> }>, ran: [] as Array<{ command: string; args: string }>, turns: 0 }
+	on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
+		world.asked.push(e as never)
+		if (answer instanceof Error) throw answer
+		const { questions } = e as { questions: Array<{ question: string }> }
+		return { result: { questions, answers: { [questions[0]?.question ?? '']: answer } } } as never
+	})
+	on('command.run', { command: 'model' }, (_, e) => {
+		world.ran.push({ command: e.command, args: e.args })
+		return { text: '' }
+	})
+	on('session.turns', () => ({ value: world.turns }))
+	return world
+}
+
+// The question is not awaited by session.start, so a test waits for it to settle.
+const settle = () => new Promise<void>(resolve => setTimeout(resolve, 20))
+
+const START = { cwd: '/work/app', surface: 'terminal', isInteractive: true } as const
+
+test('picker: the labels map to the /model aliases, and only a label is a pick', () => {
+	expect(PICK_LABELS).toEqual(['Opus', 'Sonnet', 'Haiku'])
+	expect(pickFromAnswer('Opus')).toBe('opus')
+	expect(pickFromAnswer('Sonnet')).toBe('sonnet')
+	expect(pickFromAnswer('Haiku')).toBe('haiku')
+	expect(pickFromAnswer('haiku')).toBeUndefined()
+	expect(pickFromAnswer('fable')).toBeUndefined()
+	expect(pickFromAnswer('')).toBeUndefined()
+})
+
+test('picker: a Haiku main pick puts every agent on Haiku, other picks change nothing', () => {
+	const coder = { subagentType: 'model-policy:coder' }
+	const reviewer = { subagentType: 'model-policy:reviewer', model: 'sonnet' }
+	for (const spawn of [coder, reviewer, { description: 'Write it' }, { model: 'opus' }, { subagentType: 'model-policy:mechanic', model: 'sonnet' }, { subagentType: 'Explore' }]) {
+		expect(decideSpawn(spawn, { mechanicModel: 'sonnet', mainPick: 'haiku' })).toEqual({ model: 'haiku' })
+		for (const mainPick of ['sonnet', 'opus', undefined] as const) {
+			expect(decideSpawn(spawn, { mechanicModel: 'sonnet', mainPick })).toEqual(decideSpawn(spawn, { mechanicModel: 'sonnet' }))
+		}
+	}
+	// Opus is never an agent model, whatever was picked.
+	for (const mainPick of ['opus', 'sonnet', 'haiku'] as const) {
+		expect(decideSpawn({ model: 'opus' }, { mechanicModel: 'haiku', mainPick })).not.toEqual({ model: 'opus' })
+	}
+	// An explicit Haiku id is kept as given, a fork is still denied, and a resume still passes.
+	expect(decideSpawn({ model: 'claude-haiku-4-5' }, { mechanicModel: 'haiku', mainPick: 'haiku' })).toEqual({ model: 'claude-haiku-4-5' })
+	expect(decideSpawn({ fork: true }, { mechanicModel: 'haiku', mainPick: 'haiku' })).toHaveProperty('deny')
+	expect(decideSpawn({ resume: { agentId: 'a1' } }, { mechanicModel: 'haiku', mainPick: 'haiku' })).toEqual({ allow: true })
+})
+
+test('picker: a new session asks once, and each pick runs /model with its alias', async ($, on) => {
+	const world = enginePicker(on, 'Sonnet')
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toHaveLength(1)
+	const [question] = world.asked[0]?.questions ?? []
+	expect(question?.options.map(o => o.label)).toEqual(['Opus', 'Sonnet', 'Haiku'])
+	expect(question?.header).toBe('Model')
+	expect(world.ran).toEqual([{ command: 'model', args: 'sonnet' }])
+})
+
+for (const [label, alias] of [['Opus', 'opus'], ['Haiku', 'haiku']] as const) {
+	test(`picker: ${label} runs /model ${alias}`, async ($, on) => {
+		const world = enginePicker(on, label)
+		engineTools(on)
+		await $.session.start(START)
+		await settle()
+		expect(world.ran).toEqual([{ command: 'model', args: alias }])
+	})
+}
+
+test('picker: session.start does not wait for the answer', async ($, on) => {
+	let release = () => {}
+	const gate = new Promise<void>(resolve => (release = resolve))
+	on('tool.call', { tool: 'AskUserQuestion' }, async (_, e, next) => {
+		await gate
+		return next(e)
+	})
+	const world = enginePicker(on, 'Haiku')
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.ran).toEqual([])
+	release()
+	await settle()
+	expect(world.ran).toEqual([{ command: 'model', args: 'haiku' }])
+})
+
+test('picker: a session that already has prompts, /clear, and a resume do not ask', async ($, on) => {
+	const world = enginePicker(on, 'Haiku')
+	engineTools(on)
+	// Resumed at launch: the transcript already holds prompts.
+	world.turns = 3
+	await $.session.start(START)
+	await settle()
+	// /clear and a resume end the session with no session.start after it.
+	await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+	await $.session.end({ reason: 'resume', sessionId: 's1', resume: {} } as never)
+	await settle()
+	expect(world.asked).toEqual([])
+	expect(world.ran).toEqual([])
+})
+
+test('picker: closing the question leaves the model and the agents alone', async ($, on) => {
+	const world = enginePicker(on, new Error('dismissed'))
+	engineSpawn(on)
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toHaveLength(1)
+	expect(world.ran).toEqual([])
+	const run = await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })
+	expect(run.model).toBe('sonnet')
+})
+
+test('picker: a -p run never asks and never fails', async ($, on) => {
+	const world = enginePicker(on, new Error('no one to ask'))
+	engineTools(on)
+	await $.session.start({ cwd: '/work/app', surface: null, isInteractive: false })
+	await settle()
+	expect(world.ran).toEqual([])
+})
+
+test('picker: free text typed under Other is no pick', async ($, on) => {
+	const world = enginePicker(on, 'something else')
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.ran).toEqual([])
+})
+
+test('picker: askModelAtStart off asks nothing', { options: { askModelAtStart: false } }, async ($, on) => {
+	const world = enginePicker(on, 'Haiku')
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toEqual([])
+	expect(world.ran).toEqual([])
+})
+
+test('picker: a Haiku pick caps a coder and a reviewer spawn, and /clear keeps it', async ($, on) => {
+	enginePicker(on, 'Haiku')
+	const seen = engineSpawn(on)
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect((await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })).model).toBe('haiku')
+	expect((await spawn($, { prompt: 'p', description: 'Check', subagentType: 'model-policy:reviewer', model: 'sonnet' })).model).toBe('haiku')
+	await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+	expect((await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })).model).toBe('haiku')
+	// A resumed session brings its own model, so the pick ends.
+	await $.session.end({ reason: 'resume', sessionId: 's1', resume: {} } as never)
+	expect((await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })).model).toBe('sonnet')
+	expect(seen.map(s => s.model)).toEqual(['haiku', 'haiku', 'haiku', 'sonnet'])
+})
+
+for (const label of ['Sonnet', 'Opus']) {
+	test(`picker: the ${label} pick leaves agents as before`, async ($, on) => {
+		enginePicker(on, label)
+		engineSpawn(on)
+		engineTools(on)
+		await $.session.start(START)
+		await settle()
+		const model = async (input: Record<string, unknown>) => (await spawn($, { prompt: 'p', description: 'Do', ...input })).model
+		expect(await model({ subagentType: 'model-policy:coder' })).toBe('sonnet')
+		expect(await model({ subagentType: 'model-policy:reviewer', model: 'opus' })).toBe('sonnet')
+		expect(await model({ subagentType: 'model-policy:scout' })).toBe('haiku')
+		expect(await model({ subagentType: 'model-policy:mechanic' })).toBe('haiku')
+		expect(await model({ subagentType: 'Explore' })).toBe('haiku')
+	})
+}

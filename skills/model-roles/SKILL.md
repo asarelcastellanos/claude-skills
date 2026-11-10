@@ -50,6 +50,14 @@ If you can't write that spec, you haven't finished planning. The coder reports i
 - Fixes for what a reviewer finds go to a coder, never to the reviewer.
 - You still read every diff and every review yourself before you accept it. Supervising is your job.
 
+## Model picker
+
+When a new session starts, the mod asks which model to use: Opus, Sonnet or Haiku. The pick becomes the main model, as if the user had typed `/model`. A resumed session and `/clear` do not ask. Closing the question keeps the current model, and a `-p` run never asks.
+
+The pick also sets the agent ceiling. If the user picks Haiku, every agent runs on Haiku, coders and reviewers included. With Sonnet or Opus, agents run as the table above says. Opus never runs as an agent.
+
+The `askModelAtStart` setting in `/config` turns the question off.
+
 ## Near your subscription limit
 
 From 95% of the 5-hour limit, starting a Workflow needs the user's confirmation. From 80%, `session-coach` halves its Workflow agent cap. Both thresholds are settings in `/config`.

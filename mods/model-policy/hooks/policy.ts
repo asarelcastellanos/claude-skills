@@ -1,6 +1,6 @@
 // Pure decision helpers for the model-policy mod. No engine calls here, so tests call them directly.
 
-import type { ModelPolicyDay } from '../types'
+import type { ModelPolicyDay, ModelPolicyPick } from '../types'
 
 export const WORKER_MODEL = 'sonnet'
 
@@ -32,6 +32,8 @@ export type SpawnInput = {
 export type SpawnContext = {
 	/** Model for model-policy:mechanic: "haiku" or "sonnet". */
 	mechanicModel: string
+	/** The main model the person picked at session start. Unset when nothing was picked. */
+	mainPick?: ModelPolicyPick
 }
 
 export const DEFAULT_CONTEXT: SpawnContext = { mechanicModel: 'haiku' }
@@ -43,6 +45,20 @@ const HAIKU_TYPES = new Set(['Explore', 'model-policy:scout'])
 /** Reads the five_hour window from `$.session.usage().rateLimits`. */
 export function fiveHourPercent(limits: ReadonlyArray<{ kind: string; percentUsed: number }>): number | undefined {
 	return limits.find(limit => limit.kind === 'five_hour')?.percentUsed
+}
+
+// The start-of-session question's labels, each with the alias /model takes.
+const PICKS = new Map<string, ModelPolicyPick>([
+	['Opus', 'opus'],
+	['Sonnet', 'sonnet'],
+	['Haiku', 'haiku'],
+])
+
+export const PICK_LABELS: readonly string[] = [...PICKS.keys()]
+
+/** Maps the dialog's answer to a pick. Text typed under "Other" matches no label, so it is no pick. */
+export function pickFromAnswer(answer: string): ModelPolicyPick | undefined {
+	return PICKS.get(answer)
 }
 
 /** Opus runs only in the main session. Subagents get Sonnet at most, Haiku for cheap types. */
@@ -58,6 +74,8 @@ export function decideSpawn(spawn: SpawnInput, ctx: SpawnContext = DEFAULT_CONTE
 		}
 	}
 	if (family(spawn.model) === 'haiku') return { model: spawn.model ?? 'haiku' }
+	// A main session on Haiku means the person wants the cheapest run, so no agent goes above it.
+	if (ctx.mainPick === 'haiku') return { model: 'haiku' }
 	const type = spawn.subagentType ?? ''
 	const cheap = HAIKU_TYPES.has(type) || type === 'model-policy:mechanic'
 	if (cheap && family(spawn.model) === 'sonnet') return { model: spawn.model ?? 'sonnet' }
