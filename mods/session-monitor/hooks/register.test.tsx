@@ -197,6 +197,7 @@ function engine(
     limits?: { kind: string; percentUsed: number; resetsAt?: string }[]
     worktree?: boolean
     onTool?: () => void
+    now?: number
   } = {},
 ) {
   const opens: Open[] = []
@@ -244,7 +245,7 @@ function engine(
       isStderrTruncated: false,
     },
   }))
-  on('clock.now', () => ({ value: 60_000 }))
+  on('clock.now', () => ({ value: opts.now ?? 60_000 }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.after', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: [] }))
@@ -438,7 +439,7 @@ test('a limit with a known reset gets a projection row, within 40 columns', asyn
   const projection = await ui.find({ type: 'Text', text: /at this pace, full/ })
   expect(projection).toBeDefined()
   expect(projection?.text?.length).toBeLessThanOrEqual(40)
-  expect(await ui.find({ type: 'Text', text: /7d .*10%.* resets [A-Z][a-z]{2} \d+:\d{2}/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /7d .*10%.* resets [A-Z][a-z]{2} \d+:\d{2}[ap]m/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /5h .*60%.* resets 3h 00m/ })).toBeDefined()
   await ui.unmount()
 })
@@ -633,13 +634,17 @@ test('with no agents and no room for the Main row, only "+1 more" draws', async 
 
 test('from 23 columns up the usage times are whole and no row is wider than the pane', async ($, on) => {
   const H = 3_600_000
-  const NOW = 60_000
+  // Sunday 12:59pm local. The 7 day window is 4 days in at 80 percent, so it fills in 1 day
+  // and resets in 3, both at 12:59pm: the longest time form, `Wed 12:59pm`.
+  const NOW = new Date(2026, 10, 8, 12, 59).getTime()
   const reset = NOW + 3 * 24 * H
-  const full = NOW + 64 * H
+  const full = NOW + 24 * H
+  expect(formatWeekdayTime(reset)).toBe('Wed 12:59pm')
   engine(on, {
+    now: NOW,
     limits: [
       { kind: 'five_hour', percentUsed: 60, resetsAt: new Date(NOW + 3 * H).toISOString() },
-      { kind: 'seven_day', percentUsed: 60, resetsAt: new Date(reset).toISOString() },
+      { kind: 'seven_day', percentUsed: 80, resetsAt: new Date(reset).toISOString() },
     ],
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -647,7 +652,7 @@ test('from 23 columns up the usage times are whole and no row is wider than the 
 
   for (const cols of [23, 30, 34, 36, 40]) {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: cols } })
-    expect(await ui.find({ type: 'Text', text: new RegExp(`7d .*60%.* ${escape(formatWeekdayTime(reset))}$`) })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: new RegExp(`7d .*80%.* ${escape(formatWeekdayTime(reset))}$`) })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: new RegExp(`^ {6}(at this pace, )?full ${escape(formatWeekdayTime(full))}$`) })).toBeDefined()
     for (const text of await ui.findAll({ type: 'Text' })) {
       expect((text.text ?? '').length).toBeLessThanOrEqual(cols)

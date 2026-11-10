@@ -44,6 +44,7 @@ import {
   PATH_CAP,
   policyLines,
   projectLimit,
+  resetTails,
   resetText,
   relativize,
   resumed,
@@ -589,7 +590,7 @@ describe('limit projection', () => {
 
   test('5 hour window: amber, time only on the same day', async () => {
     // 2 hours gone, 80 percent: full in 30 minutes.
-    expect(projectLimit(five(2, 80), NOW)).toEqual({ text: 'at this pace, full 12:30', short: 'full 12:30', color: WARN_AMBER })
+    expect(projectLimit(five(2, 80), NOW)).toEqual({ text: 'at this pace, full 12:30pm', short: 'full 12:30pm', color: WARN_AMBER })
     const late = new Date(2026, 10, 9, 23, 50).getTime()
     const next = projectLimit(
       { kind: 'five_hour', percent: 80, resetsAt: late + WINDOW_MS.five_hour! - 2 * H },
@@ -599,15 +600,28 @@ describe('limit projection', () => {
   })
 
   test('time formats', async () => {
-    expect(formatClock(new Date(2026, 10, 9, 14, 5).getTime())).toBe('14:05')
-    expect(formatClock(new Date(2026, 10, 9, 9, 0).getTime())).toBe('9:00')
-    expect(formatWeekdayTime(new Date(2026, 10, 13, 9, 0).getTime())).toBe('Fri 9:00')
-    expect(formatWeekdayTime(new Date(2026, 10, 9, 14, 30).getTime())).toBe('Mon 14:30')
+    expect(formatClock(new Date(2026, 10, 9, 14, 5).getTime())).toBe('2:05pm')
+    expect(formatClock(new Date(2026, 10, 9, 9, 0).getTime())).toBe('9:00am')
+    expect(formatWeekdayTime(new Date(2026, 10, 13, 9, 0).getTime())).toBe('Fri 9:00am')
+    expect(formatWeekdayTime(new Date(2026, 10, 9, 14, 30).getTime())).toBe('Mon 2:30pm')
+  })
+
+  test('time formats at the 12 hour boundaries', async () => {
+    const at = (h: number, m: number) => formatClock(new Date(2026, 10, 9, h, m).getTime())
+    expect(at(0, 5)).toBe('12:05am')
+    expect(at(0, 0)).toBe('12:00am')
+    expect(at(1, 0)).toBe('1:00am')
+    expect(at(11, 59)).toBe('11:59am')
+    expect(at(12, 0)).toBe('12:00pm')
+    expect(at(12, 59)).toBe('12:59pm')
+    expect(at(13, 0)).toBe('1:00pm')
+    expect(at(23, 0)).toBe('11:00pm')
+    expect(formatWeekdayTime(new Date(2026, 10, 11, 12, 59).getTime())).toBe('Wed 12:59pm')
   })
 
   test('reset text is a weekday time for 7d and a countdown otherwise', async () => {
     const at = new Date(2026, 10, 13, 9, 0).getTime()
-    expect(resetText('seven_day', at, NOW)).toBe('Fri 9:00')
+    expect(resetText('seven_day', at, NOW)).toBe('Fri 9:00am')
     expect(resetText('five_hour', NOW + (3 * 60 + 12) * 60_000, NOW)).toBe('3h 12m')
     expect(resetText('seven_day', undefined, NOW)).toBe('')
   })
@@ -904,19 +918,20 @@ describe('narrow widths', () => {
   })
 
   test('barLayout takes the long tail only when a bar of BAR_MIN fits beside it', async () => {
-    const tails = ['  resets Wed 10:00', '  Wed 10:00']
+    const tails = resetTails('Wed 10:00am')
     expect(barLayout(60, 6, tails)).toEqual({ barWidth: BAR_MAX, tail: tails[0] })
-    expect(barLayout(34, 6, tails)).toEqual({ barWidth: 5, tail: tails[0] })
-    expect(barLayout(30, 6, tails)).toEqual({ barWidth: 8, tail: tails[1] })
+    expect(barLayout(35, 6, tails)).toEqual({ barWidth: 4, tail: tails[0] })
+    expect(barLayout(34, 6, tails)).toEqual({ barWidth: 10, tail: tails[1] })
     expect(barLayout(23, 6, tails)).toEqual({ barWidth: 0, tail: tails[1] })
     expect(BAR_MIN).toBe(4)
   })
 
   test('at every width from 23 the reset time and the projection time are whole and fit', async () => {
-    const reset = new Date(2026, 10, 11, 10, 0).getTime()
+    const reset = new Date(2026, 10, 11, 12, 59).getTime()
     const when = formatWeekdayTime(reset)
+    expect(when).toBe('Wed 12:59pm')
     for (const cols of [23, 26, 30, 34, 36, 40, 60]) {
-      const tails = [`  resets ${when}`, `  ${when}`]
+      const tails = resetTails(when)
       const layout = barLayout(cols, 6, tails)
       const row = `  7d  ${'#'.repeat(layout.barWidth)}${' ' + '99'.padStart(3)}%${layout.tail}`
       expect(row.length).toBeLessThanOrEqual(cols)

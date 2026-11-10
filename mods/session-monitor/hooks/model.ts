@@ -322,16 +322,17 @@ export const WINDOW_MS: Record<string, number> = {
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-/** Local time as `Thu 14:30` (hour unpadded, 24 hour clock). */
+/** Local time as `Thu 2:30pm` (see formatClock). */
 export const formatWeekdayTime = (ms: number): string => {
   const d = new Date(ms)
   return `${WEEKDAYS[d.getDay()] ?? ''} ${formatClock(ms)}`
 }
 
-/** Local time as `14:30`. */
+/** Local time as `2:30pm`: hour 1 to 12 unpadded, two digit minutes, lowercase am or pm, no space. */
 export const formatClock = (ms: number): string => {
   const d = new Date(ms)
-  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+  const hour = d.getHours() % 12 === 0 ? 12 : d.getHours() % 12
+  return `${hour}:${String(d.getMinutes()).padStart(2, '0')}${d.getHours() < 12 ? 'am' : 'pm'}`
 }
 
 const sameDay = (a: number, b: number): boolean => {
@@ -349,6 +350,13 @@ export const resetText = (kind: string, resetsAt: number | undefined, now: numbe
     : kind === 'seven_day'
       ? formatWeekdayTime(resetsAt)
       : formatReset(resetsAt, now)
+
+/**
+ * The tails for a reset row, long form first. The short form takes one space, not two, so the
+ * longest time (`Wed 12:59pm`) still fits beside the percent at 23 columns.
+ */
+export const resetTails = (reset: string): string[] =>
+  reset === '' ? [''] : [`  resets ${reset}`, ` ${reset}`]
 
 /** The least percent used before a limit gets a projection row. */
 export const PROJECT_MIN_PERCENT = 5

@@ -36,6 +36,7 @@ import {
   parseWorktree,
   policyLines,
   projectLimit,
+  resetTails,
   resetText,
   resolved,
   resumed,
@@ -507,7 +508,7 @@ export const register: Register = on => {
           const projection = projections[i]
           return (
             <Box flexDirection="column">
-              {barRow(lead, l.percent, reset === '' ? [''] : [`  resets ${reset}`, `  ${reset}`])}
+              {barRow(lead, l.percent, resetTails(reset))}
               {projection !== undefined &&
                 line(
                   `${' '.repeat(lead.length)}${
