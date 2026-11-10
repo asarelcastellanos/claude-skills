@@ -204,6 +204,8 @@ function engine(
     return { value: undefined }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
   on('session.usage', () => ({
     value: {
       startedAt: 0,
@@ -269,7 +271,8 @@ test('the pane has the header and every section, and sets no status line', async
   expect(await ui.find({ type: 'Text', text: /7d .*9%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /1 running \u00b7 1 total/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Write render code/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /coder \u00b7 Sonnet \u00b7 .* \u00b7 0 tools \u00b7 0 tok/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}coder \u00b7 Sonnet \u00b7 \d+s$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}0 tools \u00b7 0 tok$/ })).toBeDefined()
   await ui.unmount()
 
   expect(statuses).toEqual([])
@@ -307,7 +310,8 @@ test('the Policy section shows when model-policy has written its state', async (
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /\u2500\u2500 Policy/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /on \u00b7 opus 7k/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}on$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}opus {4}7k$/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -329,5 +333,63 @@ test('without model-policy the pane has no Policy section', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /\u2500\u2500 Usage/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Policy/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+const AT_40 = { ...PANE.props, bodyColumns: 40 }
+
+test('at 40 columns a running agent shows its tools, tokens and last tool whole', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn(SPAWN)
+  await $.tool.call({ tool: 'Edit', agentId: 'a1' } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /^ {4}coder \u00b7 Sonnet \u00b7 \d+s$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}1 tools \u00b7 0 tok \u00b7 Edit$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('at 40 columns a finished agent shows its token count whole', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn(SPAWN)
+  await $.turn.complete({
+    agentId: 'a1',
+    reason: 'answer',
+    answer: '',
+    usage: {
+      input_tokens: 10_000,
+      output_tokens: 5_000,
+      cache_read_input_tokens: 2_000,
+      cache_creation_input_tokens: 1_000,
+    },
+  } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /^ {4}0 tools \u00b7 18k tok$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('at 40 columns the Policy section lists three families on their own rows', async ($, on) => {
+  engine(on, {
+    policy: {
+      usage: {
+        opus: { tokens: 123_000, cache: 0 },
+        sonnet: { tokens: 456_000, cache: 0 },
+        haiku: { tokens: 78_000, cache: 0 },
+      },
+    },
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /^ {2}on$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}opus {4}123k$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}sonnet {2}456k$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}haiku {3}78k$/ })).toBeDefined()
   await ui.unmount()
 })

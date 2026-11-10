@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { AgentRow } from '../types'
 import {
+  AGENT_ROWS,
   agentMeta,
   bar,
   CLAUDE_ORANGE,
@@ -23,7 +24,7 @@ import {
   locationLine,
   order,
   parseGitStatus,
-  policyLine,
+  policyLines,
   resumed,
   resolved,
   rule,
@@ -340,10 +341,16 @@ describe('pane layout', () => {
     expect(symbol('done', 0)).toBe('\u2713')
     expect(symbol('failed', 0)).toBe('\u2717')
     expect(symbol('denied', 0)).toBe('\u2298')
-    expect(symbol('untracked', 0)).toBe('\u00b7')
+    expect(symbol('untracked', 0)).toBe('\u25cb')
   })
 
-  test('agentMeta shows tokens, and the last tool only while running', async () => {
+  test('no spinner frame looks like another status glyph', async () => {
+    const others = (['done', 'failed', 'denied', 'untracked'] as const).map(s => symbol(s, 0))
+    for (const frame of SPINNER) expect(others.includes(frame)).toBe(false)
+    expect(new Set(others).size).toBe(others.length)
+  })
+
+  test('agentMeta splits into two rows that fit a 40 column dock', async () => {
     const row: AgentRow = {
       key: 'k',
       description: 'd',
@@ -355,13 +362,14 @@ describe('pane layout', () => {
       tokens: 18_000,
       lastTool: 'Edit',
     }
-    expect(agentMeta(row, 64_000)).toBe('coder \u00b7 Sonnet \u00b7 1m 04s \u00b7 12 tools \u00b7 18k tok \u00b7 Edit')
-    expect(agentMeta({ ...row, status: 'done', endedAt: 18_000 }, 64_000)).toBe(
-      'coder \u00b7 Sonnet \u00b7 18s \u00b7 12 tools \u00b7 18k tok',
-    )
-    expect(agentMeta({ ...row, lastTool: undefined }, 64_000)).toBe(
-      'coder \u00b7 Sonnet \u00b7 1m 04s \u00b7 12 tools \u00b7 18k tok',
-    )
+    expect(AGENT_ROWS).toBe(3)
+    expect(agentMeta(row, 64_000)).toEqual(['coder \u00b7 Sonnet \u00b7 1m 04s', '12 tools \u00b7 18k tok \u00b7 Edit'])
+    expect(agentMeta({ ...row, status: 'done', endedAt: 18_000 }, 64_000)).toEqual([
+      'coder \u00b7 Sonnet \u00b7 18s',
+      '12 tools \u00b7 18k tok',
+    ])
+    expect(agentMeta({ ...row, lastTool: undefined }, 64_000)[1]).toBe('12 tools \u00b7 18k tok')
+    for (const text of agentMeta(row, 64_000)) expect(4 + text.length).toBeLessThanOrEqual(40)
   })
 
   test('familyName capitalizes the family', async () => {
@@ -374,26 +382,32 @@ describe('pane layout', () => {
   })
 
   test('header is the crab when wide and tall enough', async () => {
-    const other = fixedRows(2, false)
-    expect(headerPlan(40, 40, other, true)).toEqual({ kind: 'crab', rows: 3 })
-    expect(headerPlan(CRAB_MIN_COLS, 40, other, true).kind).toBe('crab')
-    expect(headerPlan(40, CRAB.length + other, other, true).kind).toBe('crab')
+    const other = fixedRows(2, 0)
+    expect(headerPlan(40, 60, other, true)).toEqual({ kind: 'crab', rows: 3 })
+    expect(headerPlan(CRAB_MIN_COLS, 60, other, true).kind).toBe('crab')
+  })
+
+  test('header needs a spare row for "none yet" or "+N more"', async () => {
+    const other = fixedRows(2, 0)
+    expect(headerPlan(40, CRAB.length + other + 1, other, true).kind).toBe('crab')
+    expect(headerPlan(40, CRAB.length + other, other, true)).toEqual({ kind: 'line', rows: 2 })
   })
 
   test('header falls back to a line when narrow or short', async () => {
-    const other = fixedRows(2, false)
-    expect(headerPlan(CRAB_MIN_COLS - 1, 40, other, true)).toEqual({ kind: 'line', rows: 2 })
+    const other = fixedRows(2, 0)
+    expect(headerPlan(CRAB_MIN_COLS - 1, 60, other, true)).toEqual({ kind: 'line', rows: 2 })
     expect(headerPlan(40, CRAB.length + other - 1, other, true)).toEqual({ kind: 'line', rows: 2 })
-    expect(headerPlan(20, 40, other, false)).toEqual({ kind: 'line', rows: 1 })
+    expect(headerPlan(20, 60, other, false)).toEqual({ kind: 'line', rows: 1 })
   })
 
   test('fixedRows counts separators, titles and fixed lines', async () => {
     // blank after header, Session 2, Context 2, Usage 1 + 2, Agents 1, three blanks between.
-    expect(fixedRows(2, false)).toBe(1 + 2 + 2 + 3 + 1 + 3)
+    expect(fixedRows(2, 0)).toBe(1 + 2 + 2 + 3 + 1 + 3)
     // No limits still reserve one line for "no rate limits reported".
-    expect(fixedRows(0, false)).toBe(fixedRows(1, false))
-    // Policy adds its rule, its line and one more blank.
-    expect(fixedRows(2, true)).toBe(fixedRows(2, false) + 3)
+    expect(fixedRows(0, 0)).toBe(fixedRows(1, 0))
+    // Policy adds its rule, one row per policy line and one more blank.
+    expect(fixedRows(2, 1)).toBe(fixedRows(2, 0) + 3)
+    expect(fixedRows(2, 4)).toBe(fixedRows(2, 0) + 6)
   })
 
   test('rule fills the width exactly', async () => {
@@ -416,15 +430,15 @@ describe('pane layout', () => {
     expect(`${p.lead}${p.title}${p.tail}`).toBe(rule('Usage', 30))
   })
 
-  test('policyLine lists on or off, then the families with tokens', async () => {
-    expect(policyLine(true, { opus: { tokens: 7000, cache: 0 } })).toBe('on \u00b7 opus 7k')
-    expect(policyLine(false, {})).toBe('off')
+  test('policyLines lists on or off, then one row per family with tokens', async () => {
+    expect(policyLines(true, { opus: { tokens: 7000, cache: 0 } })).toEqual(['on', 'opus    7k'])
+    expect(policyLines(false, {})).toEqual(['off'])
     expect(
-      policyLine(true, {
+      policyLines(true, {
         haiku: { tokens: 400, cache: 9 },
         sonnet: { tokens: 2500, cache: 0 },
         opus: { tokens: 0, cache: 50 },
       }),
-    ).toBe('on \u00b7 sonnet 2.5k \u00b7 haiku 400')
+    ).toEqual(['on', 'sonnet  2.5k', 'haiku   400'])
   })
 })

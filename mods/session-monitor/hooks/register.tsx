@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { EnvInfo, UsageSnapshot } from '../types'
 
 import {
+  AGENT_ROWS,
   agentMeta,
   bar,
   CLAUDE_ORANGE,
@@ -24,7 +25,7 @@ import {
   limitLabel,
   locationLine,
   parseGitStatus,
-  policyLine,
+  policyLines,
   resolved,
   resumed,
   ruleParts,
@@ -328,10 +329,11 @@ export const register: Register = on => {
     const barWidth = cols >= 34 ? 10 : 6
 
     const limits = snap?.limits ?? []
-    const other = fixedRows(limits.length, policy !== undefined)
+    const policyRows = policy === undefined ? [] : policyLines(policy.enabled, policy.usage)
+    const other = fixedRows(limits.length, policyRows.length)
     const plan = headerPlan(cols, height, other, envLine(info) !== '')
     // One more row stays free for the "+N more" line.
-    const { shown, hidden } = visible(rows, height - plan.rows - other - 1, 2)
+    const { shown, hidden } = visible(rows, height - plan.rows - other - 1, AGENT_ROWS)
     const running = rows.filter(r => r.status === 'running').length
 
     const line = (text: string, color?: string, dim = false) => (
@@ -427,7 +429,7 @@ export const register: Register = on => {
         {policy !== undefined && (
           <Box flexDirection="column">
             {section('Policy')}
-            {line(`  ${policyLine(policy.enabled, policy.usage)}`)}
+            {policyRows.map(text => line(`  ${text}`))}
             {blank()}
           </Box>
         )}
@@ -444,7 +446,7 @@ export const register: Register = on => {
                 </Text>
                 {truncate(`${r.description}${tag}`, cols - 4)}
               </Text>
-              {line(`    ${agentMeta(r, now)}`, undefined, true)}
+              {agentMeta(r, now).map(text => line(`    ${text}`, undefined, true))}
             </Box>
           )
         })}

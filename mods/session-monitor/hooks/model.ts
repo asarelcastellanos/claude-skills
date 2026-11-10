@@ -221,18 +221,24 @@ export const formatTokens = (n: number): string => {
   return `${trimZero(Math.round(n / 100_000) / 10)}M`
 }
 
-/** `coder · Sonnet · 1m 04s · 12 tools · 18k tok · Edit`. The last tool shows only while the agent runs. */
-export const agentMeta = (r: AgentRow, now: number): string =>
+/** Terminal rows one agent takes: the description and the two meta rows. */
+export const AGENT_ROWS = 3
+
+/**
+ * The two meta rows of an agent, each short enough for a 40 column dock:
+ * `coder \u00b7 Sonnet \u00b7 1m 04s`, then `12 tools \u00b7 18k tok \u00b7 Edit`.
+ * The last tool shows only while the agent runs.
+ */
+export const agentMeta = (r: AgentRow, now: number): [string, string] => [
   [
     r.type,
     familyName(r.model),
     formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt)),
-    `${r.tools} tools`,
-    `${formatTokens(r.tokens)} tok`,
-    r.status === 'running' ? r.lastTool : undefined,
-  ]
+  ].join(' \u00b7 '),
+  [`${r.tools} tools`, `${formatTokens(r.tokens)} tok`, r.status === 'running' ? r.lastTool : undefined]
     .filter(Boolean)
-    .join(' \u00b7 ')
+    .join(' \u00b7 '),
+]
 
 export type Bar = { filled: string; empty: string }
 
@@ -366,7 +372,7 @@ export const symbol = (s: AgentStatus, now: number): string =>
         ? '\u2717'
         : s === 'denied'
           ? '\u2298'
-          : '\u00b7'
+          : '\u25cb'
 
 export const statusWord = (s: AgentRow['status']): string => s
 
@@ -379,8 +385,9 @@ export const CRAB_MIN_COLS = 28
 export type HeaderPlan = { kind: 'crab'; rows: number } | { kind: 'line'; rows: number }
 
 /**
- * The crab header needs CRAB_MIN_COLS columns and room for the three crab rows
- * plus every other fixed row. Otherwise the header is a title line and, when the
+ * The crab header needs CRAB_MIN_COLS columns and room for the three crab rows,
+ * every other fixed row and the one row under the agents ("none yet" or "+N more").
+ * Otherwise the header is a title line and, when the
  * environment is known, a folder, branch and model line.
  */
 export const headerPlan = (
@@ -389,13 +396,19 @@ export const headerPlan = (
   otherRows: number,
   hasEnv: boolean,
 ): HeaderPlan =>
-  cols >= CRAB_MIN_COLS && height >= CRAB.length + otherRows
+  cols >= CRAB_MIN_COLS && height >= CRAB.length + otherRows + 1
     ? { kind: 'crab', rows: CRAB.length }
     : { kind: 'line', rows: hasEnv ? 2 : 1 }
 
 /** Rows the sections take besides the header and the agent rows: separators, titles and fixed lines. */
-export const fixedRows = (limitCount: number, hasPolicy: boolean): number => {
-  const sections = [2, 2, 1 + Math.max(1, limitCount), ...(hasPolicy ? [2] : []), 1]
+export const fixedRows = (limitCount: number, policyLineCount: number): number => {
+  const sections = [
+    2,
+    2,
+    1 + Math.max(1, limitCount),
+    ...(policyLineCount > 0 ? [1 + policyLineCount] : []),
+    1,
+  ]
   // One blank row after the header, one between each pair of sections.
   return 1 + sections.reduce((a, b) => a + b, 0) + (sections.length - 1)
 }
@@ -421,11 +434,10 @@ export type PolicyUsage = Record<string, { tokens: number; cache: number }>
 
 const POLICY_FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'other'] as const
 
-/** `on \u00b7 opus 7k`: the switch, then each model family that has tokens. */
-export const policyLine = (enabled: boolean, usage: PolicyUsage): string =>
-  [
-    enabled ? 'on' : 'off',
-    ...POLICY_FAMILIES.filter(f => (usage[f]?.tokens ?? 0) > 0).map(
-      f => `${f} ${formatTokens(usage[f]?.tokens ?? 0)}`,
-    ),
-  ].join(' \u00b7 ')
+/** `on` or `off`, then one `opus    123k` row per model family that has tokens. */
+export const policyLines = (enabled: boolean, usage: PolicyUsage): string[] => [
+  enabled ? 'on' : 'off',
+  ...POLICY_FAMILIES.filter(f => (usage[f]?.tokens ?? 0) > 0).map(
+    f => `${f.padEnd(7)} ${formatTokens(usage[f]?.tokens ?? 0)}`,
+  ),
+]
