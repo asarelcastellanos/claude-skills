@@ -5,7 +5,7 @@ description: "Use to review a diff or PR for real bugs. Parallel agents find bug
 
 # PR review
 
-The main session runs this skill and spawns every reviewer itself. A subagent can't start agents of its own, so never hand this whole skill to one agent. Each finder and verifier is a fresh-context `model-policy:reviewer` agent, as the `model-roles` skill describes.
+The main session runs this skill and spawns every reviewer itself. A subagent can't start agents of its own, so never hand this whole skill to one agent. Each finder and verifier is a fresh-context `model-policy:reviewer` agent, as the `model-roles` skill describes. Spawn them with the Agent tool. Use a Workflow only when the user asks for one.
 
 Catching real bugs comes first. Reducing review rounds comes second. Noise is expensive. When an agent wrote the change, every nit costs another commit and another round.
 

@@ -124,26 +124,38 @@ export const register: Register = (on, options) => {
 		return next(e)
 	})
 
-	// /clear ends the conversation without a session.start after it. Flush the old session's
-	// tally under its own id, then start the next one from zero. next(e) comes last and fast.
+	// After /clear and on a resume the process goes on under another session id with no session.start.
+	// The old tally is taken and the atoms are emptied in one atomic update each, so a turn that lands
+	// meanwhile goes to the old snapshot or to the new tally, never to neither. The snapshot is then
+	// written under the ending id. The reset does not wait on the store write. next(e) comes last and fast.
 	on('session.end', async ($, e, next) => {
-		if (e.reason === 'clear') {
-			try {
-				await flush($, e.sessionId)
-				await update($, daysAtom, () => ({}))
-				await update($, usageAtom, () => ({}))
-				await update($, agentsAtom, () => ({}))
-				lastFlushed = ''
-				await refresh($)
-			} catch {
-				// Ending the session matters more than the tally.
-			}
-		} else {
+		const continues = e.reason === 'clear' || e.reason === 'resume'
+		if (!continues) {
 			try {
 				await flush($, e.sessionId)
 			} catch {
-				// Same.
+				// Ending the session matters more than the last tally.
 			}
+			return next(e)
+		}
+		let snapshot: Record<string, ModelPolicyDay> = {}
+		try {
+			await update($, daysAtom, old => {
+				snapshot = old
+				return {}
+			})
+			await update($, usageAtom, () => ({}))
+			await update($, agentsAtom, () => ({}))
+			lastFlushed = ''
+			await refresh($)
+		} catch {
+			// Fall through to the write: the old tally still belongs to the ending session.
+		}
+		try {
+			for (const [date, log] of Object.entries(snapshot)) await $.store.set(dayStoreKey(date, e.sessionId), log)
+			await prune($, dayKey(await $.clock.now()))
+		} catch {
+			// A failed write loses this tally only.
 		}
 		return next(e)
 	})

@@ -140,108 +140,186 @@ function writesFile(source: string): boolean {
 
 const INTERPRETER = /\b(?:python3?|node|ruby|perl|deno|bun)\b/
 
-type Split = { code: string; scripts: string[] }
+type Scan = { text: string; quotes: string[]; scripts: string[] }
 
-// Heredoc bodies are data, not shell: cut them so `>` inside a here-document is not read as a redirect.
-// A body fed to an interpreter is kept apart, since it is code that may write files.
-// `<<<` is a here-string, not a heredoc.
-function splitHeredocs(command: string): Split {
-	const kept: string[] = []
+// A quoted token that looks like a path stays visible, so `> "README.md"` is judged by its path.
+// Any other quoted text becomes "Q#<index>", with the text kept in `quotes`.
+const PATH_LIKE = /^[\w./~${}@+-]+$/
+
+// One pass over the command. It masks quoted text (`git commit -m "a > b"` has no redirect),
+// drops comments, `$(( ))`, `(( ))` and `[[ ]]`, turns `$(` and backticks into separators,
+// and cuts heredoc bodies out. A body fed to an interpreter is kept in `scripts`, since it is code.
+// A heredoc opener is `<<` or `<<-` and a word, outside quotes. `<<<` is a here-string.
+function scan(command: string): Scan {
+	let out = ''
+	let lineStart = 0
+	let i = 0
+	const quotes: string[] = []
 	const scripts: string[] = []
-	let end: string | undefined
-	let feedsInterpreter = false
-	let body: string[] = []
-	for (const line of command.split('\n')) {
-		if (end !== undefined) {
-			if (line.trim() === end) {
-				if (feedsInterpreter) scripts.push(body.join('\n'))
-				end = undefined
-				body = []
-			} else body.push(line)
+	const pending: Array<{ end: string; feeds: boolean }> = []
+	const n = command.length
+	const atWordStart = () => out === '' || /[\s;&|({]$/.test(out)
+	const mask = (body: string) => (PATH_LIKE.test(body) ? body : `"Q#${quotes.push(body) - 1}"`)
+
+	while (i < n) {
+		const c = command[i] ?? ''
+		if (c === '\\') {
+			out += command[i + 1] === '\n' ? ' ' : command.slice(i, i + 2)
+			i += 2
+		} else if (c === "'") {
+			const j = command.indexOf("'", i + 1)
+			out += mask(command.slice(i + 1, j < 0 ? n : j))
+			i = j < 0 ? n : j + 1
+		} else if (c === '"') {
+			let j = i + 1
+			while (j < n && command[j] !== '"') j += command[j] === '\\' ? 2 : 1
+			out += mask(command.slice(i + 1, Math.min(j, n)))
+			i = j + 1
+		} else if (c === '#' && atWordStart()) {
+			const j = command.indexOf('\n', i)
+			i = j < 0 ? n : j
+		} else if (command.startsWith('$((', i) || (command.startsWith('((', i) && atWordStart())) {
+			const j = command.indexOf('))', i + 2)
+			out += ' '
+			i = j < 0 ? n : j + 2
+		} else if (command.startsWith('[[', i) && atWordStart()) {
+			const j = command.indexOf(']]', i + 2)
+			out += ' '
+			i = j < 0 ? n : j + 2
+		} else if (command.startsWith('$(', i)) {
+			out += ';'
+			i += 2
+		} else if (c === '`') {
+			out += ';'
+			i++
+		} else if (c === '<' && command.startsWith('<<', i) && command[i + 2] !== '<' && command[i - 1] !== '<') {
+			let k = i + 2
+			if (command[k] === '-') k++
+			while (command[k] === ' ' || command[k] === '\t') k++
+			const word = /^(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_]\w*))/.exec(command.slice(k))
+			const end = word?.[1] ?? word?.[2] ?? word?.[3]
+			if (word && end) {
+				pending.push({ end, feeds: INTERPRETER.test(out.slice(lineStart)) })
+				i = k + word[0].length
+			} else {
+				out += c
+				i++
+			}
+		} else if (c === '\n') {
+			out += '\n'
+			i++
+			lineStart = out.length
+			for (const doc of pending.splice(0)) {
+				const body: string[] = []
+				while (i < n) {
+					const j = command.indexOf('\n', i)
+					const line = command.slice(i, j < 0 ? n : j)
+					i = j < 0 ? n : j + 1
+					if (line.trim() === doc.end) break
+					body.push(line)
+				}
+				if (doc.feeds) scripts.push(body.join('\n'))
+			}
+		} else {
+			out += c
+			i++
+		}
+	}
+	return { text: out, quotes, scripts }
+}
+
+// Segments are simple commands: split on && || ; | newline, a lone &, parentheses.
+// `>&`, `&>` and `2>&1` keep their &.
+const SEGMENT = /\|\||&&|[|;\n()]|(?<![>&])&(?![>&])/
+
+const WRAPPERS = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'xargs', 'env', 'nice'])
+const KEYWORDS = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '{', '}', '!'])
+
+function dest(args: readonly string[]): string | undefined {
+	const plain: string[] = []
+	let dir: string | undefined
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i] ?? ''
+		if (arg === '-t') dir = args[++i]
+		else if (arg.startsWith('--target-directory=')) dir = arg.slice('--target-directory='.length)
+		else if (/^-t.+/.test(arg) && !arg.startsWith('--')) dir = arg.slice(2)
+		else if (!arg.startsWith('-')) plain.push(arg)
+	}
+	return dir ?? (plain.length >= 2 ? plain[plain.length - 1] : undefined)
+}
+
+const READ_ONLY_APPLY = /^--(?:check|stat|numstat|summary)$/
+
+// Removes the redirects from a segment, so their targets are not read as arguments of the command.
+// Returns the arguments and whether a redirect wrote somewhere the main session may not.
+function withoutRedirects(segment: string, ctx: PathContext): { words: string[]; writes: boolean } {
+	let writes = false
+	const rest = segment
+		.replace(/<<<\s*\S+/g, ' ')
+		.replace(/(?<![<\d])\d*<\s*[^\s<>&|;()]+/g, ' ')
+		.replace(/\d*>&(?:\d+|-)/g, ' ')
+		.replace(/(?:&>>?|\d*>>?\|?)[ \t]*([^\s&|;<>()]+)/g, (_match, target: string) => {
+			if (!targetAllowed(target, ctx)) writes = true
+			return ' '
+		})
+	return { words: rest.trim().split(/\s+/).filter(Boolean), writes }
+}
+
+function segmentWrites(segment: string, quotes: readonly string[], ctx: PathContext): boolean {
+	const { words, writes } = withoutRedirects(segment, ctx)
+	if (writes) return true
+
+	// Skip what comes before the command: keywords, VAR=value, sudo and friends with their flags.
+	let at = 0
+	for (; at < words.length; at++) {
+		const word = (words[at] ?? '').replace(/^[{!]+/, '')
+		if (word === '' || KEYWORDS.has(word) || /^\w+=\S*$/.test(word)) continue
+		if (WRAPPERS.has(word)) {
+			while ((words[at + 1] ?? '').startsWith('-')) at++
 			continue
 		}
-		kept.push(line)
-		const match = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_]\w*)\1/.exec(line)
-		if (match) {
-			end = match[2]
-			feedsInterpreter = INTERPRETER.test(line.slice(0, match.index))
+		break
+	}
+	const cmd = (words[at] ?? '').split('/').pop() ?? ''
+	const args = words.slice(at + 1)
+
+	if (cmd === 'sed') return args.some(arg => /^-[A-Za-z]*i/.test(arg) || arg === '--in-place')
+	// -i alone or in a cluster of switches that take no argument (-pi, -pie, -i.bak). -Mstrict and -I are not it.
+	if (cmd === 'perl' && args.some(arg => /^-[pnalwWsStTuUc]*i[pnalwWsStTuUce]*(?:\.\S*)?$/.test(arg))) return true
+	if (cmd === 'patch') return !args.includes('--dry-run')
+	if (cmd === 'tee') return args.filter(arg => !arg.startsWith('-')).some(target => !targetAllowed(target, ctx))
+	if (cmd === 'cp' || cmd === 'mv' || cmd === 'install' || cmd === 'ln') {
+		const to = dest(args)
+		return to !== undefined && !targetAllowed(to, ctx)
+	}
+	if (cmd === 'git') {
+		let i = 0
+		while (i < args.length && (args[i] ?? '').startsWith('-')) i += args[i] === '-C' || args[i] === '-c' ? 2 : 1
+		const rest = args.slice(i + 1)
+		// git apply writes the tree unless it only checks or reports.
+		if (args[i] === 'apply') return !rest.some(arg => READ_ONLY_APPLY.test(arg))
+		if (args[i] === 'mv') {
+			const to = dest(rest)
+			return to !== undefined && !targetAllowed(to, ctx)
+		}
+		return false
+	}
+	// python -c "...", node -e "...": inspect only the script argument.
+	if (/^(?:python[\d.]*|node|ruby|perl|deno|bun)$/.test(cmd)) {
+		for (let i = 0; i < args.length - 1; i++) {
+			const index = /^"Q#(\d+)"$/.exec(args[i + 1] ?? '')?.[1]
+			if (/^-[A-Za-z]*[ce]$/.test(args[i] ?? '') && index !== undefined && writesFile(quotes[Number(index)] ?? '')) return true
 		}
 	}
-	// An unterminated heredoc still runs to the end of the input.
-	if (end !== undefined && feedsInterpreter) scripts.push(body.join('\n'))
-	return { code: kept.join('\n'), scripts }
-}
-
-// Quoted text is not shell syntax: `git commit -m "a > b"` has no redirect. A quoted
-// token that looks like a path stays visible, so `> "README.md"` is judged by its path.
-function maskQuotes(command: string): string {
-	return command.replace(/"((?:\\.|[^"\\])*)"|'([^']*)'/g, (_whole, dq?: string, sq?: string) => {
-		const body = dq ?? sq ?? ''
-		return /^[\w./~${}@+-]+$/.test(body) ? body : '"Q"'
-	})
-}
-
-const CMD = String.raw`(?:^|[;&|(\n]|&&)\s*(?:(?:sudo|command|exec)\s+)?`
-
-function fileOpDestinations(code: string): string[] {
-	const out: string[] = []
-	const re = new RegExp(`${CMD}(?:git\\s+)?(cp|mv|install|ln)\\s+([^;&|\\n]*)`, 'g')
-	for (const match of code.matchAll(re)) {
-		const args = (match[2] ?? '').split(/\s+/).filter(Boolean)
-		const plain: string[] = []
-		let dir: string | undefined
-		for (let i = 0; i < args.length; i++) {
-			const arg = args[i] ?? ''
-			if (arg === '-t') dir = args[++i]
-			else if (arg.startsWith('--target-directory=')) dir = arg.slice('--target-directory='.length)
-			else if (/^-t.+/.test(arg) && !arg.startsWith('--')) dir = arg.slice(2)
-			else if (!arg.startsWith('-')) plain.push(arg)
-		}
-		const dest = dir ?? (plain.length >= 2 ? plain[plain.length - 1] : undefined)
-		if (dest !== undefined) out.push(dest)
-	}
-	return out
+	return false
 }
 
 /** True when the shell command writes a file the main session may not write. */
 export function isFileWrite(command: string, ctx: PathContext = {}): boolean {
-	const { code: unmasked, scripts } = splitHeredocs(command)
-
+	const { text, quotes, scripts } = scan(command)
 	// python - <<'PY' ... PY and the like: the body is code.
 	if (scripts.some(writesFile)) return true
-
-	// python -c "...", node -e "...": inspect only the script argument.
-	for (const match of unmasked.matchAll(
-		/(?:^|[\s;&|(])(?:python3?|node|ruby|perl|deno|bun)\b[^|;&\n]*?\s-[A-Za-z]*[ce]\s+("(?:\\.|[^"\\])*"|'[^']*')/g,
-	)) {
-		if (writesFile(match[1] ?? '')) return true
-	}
-
-	const code = maskQuotes(unmasked)
-		.replace(/\$\(\([^)]*\)\)/g, ' ')
-		.replace(/(?:^|[;&|\s])\(\([^)]*\)\)/g, ' ')
-		.replace(/\[\[[^\]]*\]\]/g, ' ')
-
-	if (/(?:^|[\s;&|(])sed\b[^\n;&|]*\s(?:-[A-Za-z]*i|--in-place)/.test(code)) return true
-	// -i alone or in a cluster of switches that take no argument (-pi, -pie, -i.bak). -Mstrict and -I are not it.
-	if (/(?:^|[\s;&|(])perl\b[^\n;&|]*\s-[pnalwWsStTuUc]*i[pnalwWsStTuUce]*(?:\.\S*)?(?=\s|$)/.test(code)) return true
-
-	// git apply writes the tree unless it only checks or reports.
-	if (/(?:^|[\s;&|(])git\s+(?:-\S+\s+)*apply\b/.test(code) && !/--(?:check|stat|numstat|summary)\b/.test(code)) return true
-	if (/(?:^|[\s;&|(])patch(?:\s|$)/.test(code) && !/--dry-run\b/.test(code)) return true
-
-	// tee writes every file it is given.
-	for (const match of code.matchAll(/(?:^|[\s;&|(])tee\b([^\n;&|]*)/g)) {
-		const targets = (match[1] ?? '').split(/\s+/).filter(arg => arg !== '' && !arg.startsWith('-'))
-		if (targets.length === 0 || targets.some(target => !targetAllowed(target, ctx))) return true
-	}
-
-	// Redirects: `>`, `>>`, `&>`, `2>`, `>|`. `>&2` and `2>&1` have `&` where the target would be, so they never match.
-	for (const match of code.matchAll(/(?:&>>?|\d*>>?\|?)[ \t]*([^\s&|;<>()]+)/g)) {
-		if (!targetAllowed(match[1] ?? '', ctx)) return true
-	}
-
-	return fileOpDestinations(code).some(dest => !targetAllowed(dest, ctx))
+	return text.split(SEGMENT).some(segment => segmentWrites(segment, quotes, ctx))
 }
 
 // ---- Per-day log ----

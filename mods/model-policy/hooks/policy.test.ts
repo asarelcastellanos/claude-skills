@@ -43,7 +43,13 @@ function engineTools(on: On) {
 	on('session.start', (_, e) => ({ cwd: e.cwd }))
 	on('command.register', () => ({ value: { command: 'model-policy' } }))
 	const statuses: Array<string | undefined> = []
-	const world = { percent: undefined as number | undefined, throws: false, deny: false }
+	const world = {
+		percent: undefined as number | undefined,
+		throws: false,
+		deny: false,
+		failSet: false,
+		onSet: undefined as undefined | (() => Promise<unknown>),
+	}
 	on('session.usage', () => {
 		if (world.throws) throw new Error('usage unavailable')
 		const rateLimits = world.percent === undefined ? [] : [{ kind: 'five_hour', percentUsed: world.percent }]
@@ -54,7 +60,9 @@ function engineTools(on: On) {
 	// The store is a Map, so a test reads what the plugin kept and what it deleted.
 	const kv = new Map<string, unknown>()
 	on('store.get', (_, e) => ({ value: kv.get(e.key) }))
-	on('store.set', (_, e) => {
+	on('store.set', async (_, e) => {
+		if (world.failSet) throw new Error('store is full')
+		await world.onSet?.()
 		kv.set(e.key, JSON.parse(JSON.stringify(e.value)))
 		return { value: undefined }
 	})
@@ -152,6 +160,17 @@ test('shell write detection: writes', () => {
 		'echo x > $TMPDIR/../a.ts',
 		'echo x > "$OUT"',
 		'grep x <<<"foo"\necho x > src/a.ts',
+		// Round 2: each simple command is judged alone.
+		'git apply --check p.diff && git apply p.diff',
+		'patch --dry-run -p1 < p && patch -p1 < p',
+		'cp a src/b.ts > /dev/null',
+		'make | tee /tmp/out.log && cp a src/b.ts',
+		'echo $((1<<n))\ncat > src/a.ts',
+		'git commit -m "note: cat <<EOF"\ncat > src/a.ts',
+		'ls; sed -i s/a/b/ f.ts',
+		'echo $(sed -i s/a/b/ f.ts)',
+		'FOO=1 sudo sed -i s/a/b/ f.ts',
+		'(cp a src/b.ts)',
 	]
 	for (const command of writes) expect([command, isFileWrite(command, ctx)]).toEqual([command, true])
 })
@@ -196,6 +215,15 @@ test('shell write detection: no false positives', () => {
 		'grep x <<<"foo"\necho done',
 		"python3 - <<'PY'\nprint('hi')\nPY",
 		"python3 - <<'PY'\nimport sys\nsys.stdout.write('x')\nPY",
+		// Round 2: redirects are not arguments.
+		'make | tee out.log > /dev/null',
+		'make | tee /tmp/out.log 2>&1',
+		'cp a /tmp/b 2>/dev/null',
+		'cp a.txt /tmp/b.txt 2>&1',
+		'git apply --check p.diff && git apply --stat p.diff',
+		'patch --dry-run -p1 < p',
+		'echo $((1<<n))\ncat > /tmp/a.ts',
+		'git commit -m "note: cat <<EOF"\necho done',
 	]
 	for (const command of reads) expect([command, isFileWrite(command, ctx)]).toEqual([command, false])
 })
@@ -418,4 +446,49 @@ test('B6: /clear flushes under the old id, then resets the session tally and age
 	// Other end reasons flush but keep the tally.
 	await $.session.end({ reason: 'other', sessionId: 's2', resume: {} } as never)
 	expect((await slash($, '')).text).toMatch(/sonnet\s+50 tokens/)
+})
+
+test('session.end: a turn landing during the store write is not lost', async ($, on) => {
+	const world = engineTools(on)
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+	const usage = (n: number) => ({ model: 'claude-sonnet-5-5', input_tokens: n, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+	await turn($, usage(100))
+
+	let injected = false
+	world.world.onSet = async () => {
+		if (injected) return
+		injected = true
+		await turn($, usage(50))
+	}
+	await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+	world.world.onSet = undefined
+	// The old key holds the snapshot taken at the reset. The turn that landed after it is in the new tally.
+	expect((world.kv.get(`day-${dayKey(NOON)}-s1`) as { families: { sonnet: { tokens: number } } }).families.sonnet.tokens).toBe(100)
+	expect((await slash($, '')).text).toMatch(/sonnet\s+50 tokens/)
+	world.sid.id = 's2'
+	expect((await slash($, 'week')).text).toMatch(/sonnet\s+150 tokens/)
+})
+
+test('session.end: a failed store write still resets the tally', async ($, on) => {
+	const world = engineTools(on)
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+	await turn($, { model: 'claude-sonnet-5-5', input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+	world.world.failSet = true
+	await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+	world.world.failSet = false
+	expect([...world.kv.keys()]).toEqual([])
+	expect((await slash($, '')).text).toMatch(/No turns counted yet/)
+})
+
+test('session.end: resume resets and the week does not double count', async ($, on) => {
+	const world = engineTools(on)
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+	const usage = (n: number) => ({ model: 'claude-sonnet-5-5', input_tokens: n, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+	await turn($, usage(100))
+	await $.session.end({ reason: 'resume', sessionId: 's1', resume: {} } as never)
+	world.sid.id = 's2'
+	expect((await slash($, '')).text).toMatch(/No turns counted yet/)
+	expect((await slash($, 'week')).text).toMatch(/sonnet\s+100 tokens/)
+	await turn($, usage(50))
+	expect((await slash($, 'week')).text).toMatch(/sonnet\s+150 tokens/)
 })

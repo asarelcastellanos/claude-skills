@@ -8,6 +8,7 @@ import {
   effectiveCap,
   hintText,
   initialCoach,
+  INJECTED_TAGS,
   isIdle,
   isTypedPrompt,
   nextHintThreshold,
@@ -91,6 +92,21 @@ describe('classifier prompt', () => {
       { role: 'user', text: '<task-notification>after</task-notification>' },
     ]
     expect(recentUserPrompts(rows, 'new one', 3)).toEqual(['real one', 'real two'])
+  })
+
+  test('every injected tag is dropped, with or without attributes', () => {
+    for (const tag of INJECTED_TAGS) {
+      expect(isTypedPrompt({ role: 'user', text: `<${tag}>x</${tag}>` })).toBe(false)
+      expect(isTypedPrompt({ role: 'user', text: ` <${tag} id="1">x` })).toBe(false)
+      expect(isTypedPrompt({ role: 'user', text: `<${tag}` })).toBe(false)
+    }
+    expect(isTypedPrompt({ role: 'user', text: '<System-Reminder>x' })).toBe(true)
+    expect(isTypedPrompt({ role: 'user', text: '<task-notificationx>' })).toBe(true)
+  })
+
+  test('prompts that start with a tag are kept', () => {
+    expect(isTypedPrompt({ role: 'user', text: '<Button> does not render in Safari' })).toBe(true)
+    expect(isTypedPrompt({ role: 'user', text: '<div> overflows its parent' })).toBe(true)
   })
 
   test('a typed prompt that mentions a tag later in the text is kept', () => {

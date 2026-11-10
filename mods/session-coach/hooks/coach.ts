@@ -106,16 +106,36 @@ export function hintText(percent: number, tokens?: number): string {
   return `New task? /clear starts fresh. Context is ${percent}% full${size}.`
 }
 
+/** Tags the engine puts at the start of a user row it injected. */
+export const INJECTED_TAGS = [
+  'task-notification',
+  'system-reminder',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command-stdout',
+  'local-command-stderr',
+  'local-command-caveat',
+  'user-prompt-submit-hook',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+  'agent-message',
+  'pasted_content',
+  'tool_use_error',
+] as const
+
+const INJECTED_START = new RegExp(`^<(${INJECTED_TAGS.join('|')})(\\s|>|$)`)
+
 /**
  * True for a row the person typed. SessionMessage has no meta marker, so rows
- * that are empty or start with a tag (`<task-notification>`, `<system-reminder>`,
- * `<command-name>`, `<local-command-stdout>`) count as engine-injected.
+ * that are empty or start with one of INJECTED_TAGS count as engine-injected.
  */
 export function isTypedPrompt(row: { role: string; text: string }): boolean {
   if (row.role !== 'user') return false
   const text = row.text.trim()
 
-  return text !== '' && !/^<[A-Za-z][\w-]*/.test(text)
+  return text !== '' && !INJECTED_START.test(text)
 }
 
 /** The last `count` typed user prompts, leaving out the new prompt if it is already stored. */
