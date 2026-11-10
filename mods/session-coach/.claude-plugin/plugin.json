@@ -1,0 +1,39 @@
+{
+  "name": "session-coach",
+  "version": "0.1.0",
+  "author": { "name": "Asarel Castellanos" },
+  "description": "Suggests /clear when a prompt starts a new task, and budgets workflow agents, tighter when the 5-hour limit runs high.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "clearHintMinContextPercent": {
+      "type": "number",
+      "title": "Clear hint: minimum context percent",
+      "description": "Only suggest /clear when the context window is at least this percent full.",
+      "default": 20
+    },
+    "idleMinutes": {
+      "type": "number",
+      "title": "Clear hint: idle minutes",
+      "description": "A prompt sent after this many idle minutes counts as a new task without asking a model.",
+      "default": 30
+    },
+    "useModelCheck": {
+      "type": "boolean",
+      "title": "Clear hint: ask a small model",
+      "description": "Ask a small model (haiku) whether a prompt starts a new task. Costs one short call per checked prompt.",
+      "default": true
+    },
+    "tightenAtPercent": {
+      "type": "number",
+      "title": "Halve the workflow cap at this 5-hour limit percent",
+      "description": "When the 5-hour usage limit is at or above this percent, workflow runs get half of workflowAgentCap (at least 1).",
+      "default": 80
+    },
+    "workflowAgentCap": {
+      "type": "number",
+      "title": "Workflow agent cap",
+      "description": "Most agents one workflow run may start. 0 means no cap.",
+      "default": 12
+    }
+  }
+}

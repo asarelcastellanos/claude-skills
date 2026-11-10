@@ -36,7 +36,7 @@ Count the rounds. Stop after round 3 if Important findings remain. Also stop if 
 
 ## 6. Fix recurring findings at the source
 
-If a finding is a mistake that has come up before, propose a lasting fix to the user. The fix can be a lint rule, a line in CLAUDE.md or REVIEW.md, or an edit to a skill.
+Add each mistake worth remembering to LESSONS.md, as step 8 of `ship-a-change` describes. If LESSONS.md shows the mistake has come up before, propose a lasting fix to the user. The fix can be a lint rule, a line in CLAUDE.md or REVIEW.md, or an edit to a skill.
 
 ## 7. Report
 

@@ -1,0 +1,24 @@
+{
+	"name": "asarel-claude-skills",
+	"description": "Skills and mods for Claude Code sessions",
+	"owner": {
+		"name": "Asarel Castellanos"
+	},
+	"plugins": [
+		{
+			"name": "model-policy",
+			"source": "./mods/model-policy",
+			"description": "Opus runs only in the main session. Subagents run on Sonnet at most, and on Haiku for lookups and mechanical edits."
+		},
+		{
+			"name": "session-monitor",
+			"source": "./mods/session-monitor",
+			"description": "Sidebar pane showing subagents, subscription usage, context fill, cost and session time, plus a compact status line."
+		},
+		{
+			"name": "session-coach",
+			"source": "./mods/session-coach",
+			"description": "Suggests /clear when a prompt starts a new task, and budgets workflow agents."
+		}
+	]
+}

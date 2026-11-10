@@ -21,7 +21,7 @@ For a bug fix, reproduce the bug before the fix and show it gone after. Confirm 
 
 ## 3. Get a fresh-context review
 
-Spawn a subagent that has not seen your work. Give it the diff against the base branch and the stated intent of the change. Tell it to follow the `pr-review` skill. Do not give it your reasoning or your opinion of the code. Then follow the `address-review-findings` skill for what it reports.
+Run the `pr-review` skill from the main session. It spawns `model-policy:reviewer` agents that have not seen your work. Give them the diff against the base branch and the stated intent of the change. Do not give them your reasoning or your opinion of the code. Don't hand the whole review to one agent, because a subagent can't start agents of its own. Then follow the `address-review-findings` skill for what it reports.
 
 ## 4. Simplify the diff
 
@@ -31,7 +31,7 @@ Keep the change small. If it is over about 400 lines or mixes unrelated changes,
 
 ## 5. Fix recurring problems at the source
 
-If a review found a mistake that has happened before, propose a lasting fix to the user. The fix can be a lint rule, a line in CLAUDE.md or REVIEW.md, or an edit to a skill. Fixing one instance at a time does not stop the next one.
+Add each mistake worth remembering to LESSONS.md, as step 8 of `ship-a-change` describes. If LESSONS.md shows the mistake has happened before, propose a lasting fix to the user. The fix can be a lint rule, a line in CLAUDE.md or REVIEW.md, or an edit to a skill. Fixing one instance at a time does not stop the next one.
 
 ## 6. Write the PR description
 
@@ -43,7 +43,7 @@ Set the risk tier from what the change touches. Never set it from who wrote the 
 - Medium. Ordinary product changes, caching, config, and prompts.
 - High. Auth, billing, data migrations, CI workflow files, installers, updaters, and anything that deletes data.
 
-For a high-risk change, tell the user a person needs to review it before merge. An agent's approval never replaces a person's.
+The user reviews every PR into the default branch. For a high-risk change, point them to the parts that need the closest look. An agent's approval never replaces a person's.
 
 ## 7. Report
 

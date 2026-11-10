@@ -18,7 +18,7 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 
 | Skill | What it does |
 |---|---|
-| `ship-a-change` | Carries one code change from request to merged PR in eight steps, and calls the three skills below at the right points. |
+| `ship-a-change` | Carries one code change from request to merged PR in nine steps. You approve the plan and the final PR. Agents do the work, the main session supervises, and lessons go into the project's `LESSONS.md`. |
 | `verify-before-pr` | Runs the real checks, uses the change the way a user would, gets a fresh-context review, and sets the risk tier for the PR description. |
 | `pr-review` | Reviews a diff for real bugs. Finder agents each take one lens, separate agents verify each finding, and re-reviews stop after three rounds. |
 | `address-review-findings` | Gives every review finding an outcome, fixes each mistake everywhere it appears, and escalates to the user after three rounds. |
@@ -31,6 +31,22 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 | `principle-type-system-discipline` | Make illegal states unrepresentable, and let the compiler catch the rest. |
 | `principle-boundary-discipline` | Validate data where it enters the system, and trust the types inside. |
 | `principle-encode-lessons-in-structure` | When a correction repeats, turn it into a lint, check, or script instead of another instruction. |
+
+### Models
+
+| Skill | What it does |
+|---|---|
+| `model-roles` | Opus is the orchestrator: it plans, delegates, and supervises. Sonnet writes and reviews code. Haiku does lookups and mechanical edits. The `model-policy` mod enforces it. |
+
+### Mods
+
+A mod is a plugin of function hooks that changes how Claude Code itself behaves: which tool calls run, what the status line shows, which slash commands exist. Mods live in `mods/`, and `.claude-plugin/marketplace.json` lists them, so this repo is also a plugin marketplace.
+
+| Mod | What it does |
+|---|---|
+| `model-policy` | Keeps Opus for the main session only. Every subagent runs on Sonnet at most, Workflow agents included, and forks are denied. Blocks the main session from writing code through Edit and Write. It also checks shell commands for code writes, as a best-effort guard with known gaps such as `bash -c` strings. Lookups and `Explore` stay on Haiku. Ships four agents: `scout` (Haiku, read-only), `mechanic` (Haiku, mechanical edits), `coder` (Sonnet), and `reviewer` (Sonnet, no edit tools). Past 95% of your 5-hour limit, it asks before a Workflow starts. `/model-policy week` shows seven days of tokens by model and agent type. `/model-policy off` turns it off for a session. |
+| `session-monitor` | A sidebar pane with every subagent this session started (task, status, model, elapsed time, tool calls, tokens), the 5-hour and 7-day subscription limits with reset times, context fill, and session cost. It turns yellow at 70% and red at 90%. `/monitor` opens it. It also replaces a status line script: the status line shows the folder, git branch (with `*` for uncommitted changes), main model, limits, and context. |
+| `session-coach` | When context is past 20% and your new prompt looks like a different task, it suggests `/clear` above the prompt. Haiku makes that call alongside your prompt, without delaying it. It also caps each Workflow run at 12 agents, halved past 80% of the 5-hour limit, and warns when the session passes 25, 50, and 100 agents. Change the limits in `/config`. |
 
 ### Web UI
 
@@ -58,9 +74,17 @@ git clone https://github.com/asarelcastellanos/claude-skills.git ~/claude-skills
 | Windows (PowerShell) | `~/claude-skills/install.ps1` |
 | macOS or Linux | `bash ~/claude-skills/install.sh` |
 
-The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. Running the script again is safe.
+The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. If the `claude` CLI is installed, the script also adds this repo as a plugin marketplace and installs every mod in `mods/`. Claude Code reads the mods from this folder, so after a `git pull` or an edit, run `/reload-plugins` in a session. Running the script again is safe.
 
 The skills are links, not copies, so `git pull` updates them. You don't need to reinstall.
+
+### Install only some mods
+
+From a terminal session, install one mod by name:
+
+```
+/plugin install session-monitor --marketplace asarelcastellanos/claude-skills
+```
 
 ### Install only some skills
 
@@ -72,12 +96,15 @@ Most skills stand alone. These depend on others:
 - `typescript-best-practices` and `principle-boundary-discipline` refer to `principle-type-system-discipline`, and it refers to `principle-encode-lessons-in-structure`.
 - `web-ui` applies `typescript-best-practices` and `principle-boundary-discipline` to the code it writes.
 - `web-ui` works best with `heroui-react` for React projects.
+- `model-roles` needs the `model-policy` mod. The three mods work alone or together. `pr-review` and `verify-before-pr` use its `model-policy:reviewer` agent.
 - `ship-a-change` runs `verify-before-pr`, `pr-review` and `address-review-findings`. `verify-before-pr` writes the PR description with `git-messages`.
 
 ## Make it yours
 
 - **Writing rules:** edit `CLAUDE.md` to change what applies to every conversation.
 - **Brand color:** change `--accent` in your project's CSS. Every `web-ui` component follows it. See `skills/web-ui/references/setup.md`.
+- **Model policy:** type `/model-policy off` to turn it off for one session. Edit `mods/model-policy/hooks/policy.ts` to change which models it picks or which files the main session may write, then run `/reload-plugins`.
+- **New mods:** add a folder under `mods/` and list it in `.claude-plugin/marketplace.json`.
 - **New skills:** add a folder with a `SKILL.md` under `skills/`, then run the install script again.
 
 ## License

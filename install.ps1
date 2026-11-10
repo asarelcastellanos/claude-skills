@@ -30,4 +30,19 @@ if ($existing -notmatch [regex]::Escape($importLine)) {
 	Write-Output "added import to $globalMd"
 }
 
+# The mods need the claude CLI. Skip them with a note when the CLI is missing.
+# The marketplace is this repo's folder, so edits to a mod apply after /reload-plugins.
+# Each folder under mods/ is named after its plugin, so the folder name is the install name.
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+	claude plugin marketplace add $repo --scope user | Out-Null
+	if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+	foreach ($mod in Get-ChildItem (Join-Path $repo "mods") -Directory) {
+		claude plugin install "$($mod.Name)@asarel-claude-skills" --scope user | Out-Null
+		if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+		Write-Output "installed the $($mod.Name) mod"
+	}
+} else {
+	Write-Output "claude CLI not found, skipped the mods. Re-run this script after installing it."
+}
+
 if (Test-Path $backup) { Write-Output "replaced skills were moved to $backup" }

@@ -37,4 +37,18 @@ if ! grep -qxF "$import_line" "$global_md"; then
 	echo "added import to $global_md"
 fi
 
+# The mods need the claude CLI. Skip them with a note when the CLI is missing.
+# The marketplace is this repo's folder, so edits to a mod apply after /reload-plugins.
+# Each folder under mods/ is named after its plugin, so the folder name is the install name.
+if command -v claude >/dev/null 2>&1; then
+	claude plugin marketplace add "$repo" --scope user >/dev/null
+	for mod in "$repo"/mods/*/; do
+		name="$(basename "$mod")"
+		claude plugin install "$name@asarel-claude-skills" --scope user >/dev/null
+		echo "installed the $name mod"
+	done
+else
+	echo "claude CLI not found, skipped the mods. Re-run this script after installing it." >&2
+fi
+
 if [ -d "$backup" ]; then echo "replaced skills were moved to $backup"; fi
