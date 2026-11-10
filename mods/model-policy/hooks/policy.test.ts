@@ -72,6 +72,7 @@ function engineTools(on: On) {
 	})
 	on('store.keys', () => ({ value: [...kv.keys()] }))
 	const clock = mock.clock(on, { now: NOON })
+	// The mod no longer sets a status line: a call here is recorded so a test can assert none came.
 	on('ui.status', (_, e) => {
 		statuses.push(e.text)
 		return { value: undefined }
@@ -308,8 +309,22 @@ test('turn.complete adds usage to the tally and passes the turn through', async 
 	await turn($, { model: 'claude-sonnet-5-5', input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0 })
 
 	const shown = await slash($, '')
-	expect(statuses.at(-1)).toBe('policy on · sonnet 2k')
+	expect(statuses).toEqual([])
 	expect(shown.text).toMatch(/sonnet\s+2k tokens\s+100%\s+cache 9k/)
+})
+
+test('session.start writes usage once, so other plugins can tell the mod is installed', async ($, on) => {
+	const statuses = engineTools(on)
+	const writes: Array<{ plugin: string; key: string; value: unknown }> = []
+	on('state.set', (_, e) => {
+		writes.push({ plugin: e.plugin, key: e.key, value: e.value })
+		return { value: { isSet: true, version: writes.length } }
+	})
+
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+
+	expect(writes).toEqual([{ plugin: 'model-policy', key: 'usage', value: {} }])
+	expect(statuses).toEqual([])
 })
 
 test('Sonnet at most: haiku types and explicit haiku are kept', async ($, on) => {
