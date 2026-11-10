@@ -2,6 +2,16 @@
 
 Mistakes worth remembering, newest first. Step 8 of the `ship-a-change` skill adds entries. When a mistake shows up here twice, it needs a lasting fix instead of a second entry.
 
+## 2026-11-10: Renaming the marketplace broke existing installs
+- What happened: the marketplace rename only changed the new name in the installers, so re-running install.sh on a machine with the old marketplace failed, and a fresh clone loaded every mod twice.
+- Caught by: the review, integration lens
+- Fix: both installers remove the old marketplace and its mods before adding the new one. Any future rename of a plugin or marketplace needs the same migration and an install test in a fresh CLAUDE_CONFIG_DIR.
+
+## 2026-11-10: Lessons were recorded after the merge
+- What happened: ship-a-change recorded lessons on the branch after the PR merged, so the commit had nowhere to go.
+- Caught by: the review, logic and edge-case lenses
+- Fix: lessons are now step 7, before the PR opens.
+
 ## 2026-11-10: Monitor rows overflowed the 40-column dock
 - What happened: rows in the session-monitor pane drew wider than the pane at narrow widths. Each fix covered the rows a review had named, and the next round found others.
 - Caught by: review rounds 1 to 4 of the monitor restyle
