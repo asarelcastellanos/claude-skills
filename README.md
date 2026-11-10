@@ -32,6 +32,22 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 | `principle-boundary-discipline` | Validate data where it enters the system, and trust the types inside. |
 | `principle-encode-lessons-in-structure` | When a correction repeats, turn it into a lint, check, or script instead of another instruction. |
 
+### Models
+
+| Skill | What it does |
+|---|---|
+| `model-roles` | Opus plans, supervises, and reviews. Sonnet writes all code and runs every subagent task except code review. The `model-policy` mod enforces it. |
+
+### Mods
+
+A mod is a plugin of function hooks that changes how Claude Code itself behaves: which tool calls run, what the status line shows, which slash commands exist. Mods live in `mods/`, and `.claude-plugin/marketplace.json` lists them, so this repo is also a plugin marketplace.
+
+| Mod | What it does |
+|---|---|
+| `model-policy` | Runs every review agent on Opus and every other agent on Sonnet, Workflow agents included. Blocks the main session from writing code through Edit, Write, or the shell. Ships two agents, `model-policy:coder` (Sonnet) and `model-policy:reviewer` (Opus, no edit tools). Shows tokens per model in the status line. `/model-policy off` turns it off for a session. |
+| `session-monitor` | A sidebar pane with every subagent this session started (task, status, model, elapsed time, tool calls, tokens), the 5-hour and 7-day subscription limits with reset times, context fill, and session cost. It turns yellow at 70% and red at 90%. `/monitor` opens it. A short version shows in the status line. |
+| `session-coach` | When context is past 20% and your new prompt looks like a different task, it suggests `/clear` above the prompt. Haiku makes that call alongside your prompt, without delaying it. It also caps each Workflow run at 12 agents and warns when the session passes 25, 50, and 100 agents. Change the limits in `/config`. |
+
 ### Web UI
 
 | Skill | What it does |
@@ -58,9 +74,17 @@ git clone https://github.com/asarelcastellanos/claude-skills.git ~/claude-skills
 | Windows (PowerShell) | `~/claude-skills/install.ps1` |
 | macOS or Linux | `bash ~/claude-skills/install.sh` |
 
-The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. Running the script again is safe.
+The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. If the `claude` CLI is installed, the script also adds this repo as a plugin marketplace and installs every mod in `mods/`. Claude Code reads the mods from this folder, so after a `git pull` or an edit, run `/reload-plugins` in a session. Running the script again is safe.
 
 The skills are links, not copies, so `git pull` updates them. You don't need to reinstall.
+
+### Install only some mods
+
+From a terminal session, install one mod by name:
+
+```
+/plugin install session-monitor --marketplace asarelcastellanos/claude-skills
+```
 
 ### Install only some skills
 
@@ -72,12 +96,15 @@ Most skills stand alone. These depend on others:
 - `typescript-best-practices` and `principle-boundary-discipline` refer to `principle-type-system-discipline`, and it refers to `principle-encode-lessons-in-structure`.
 - `web-ui` applies `typescript-best-practices` and `principle-boundary-discipline` to the code it writes.
 - `web-ui` works best with `heroui-react` for React projects.
+- `model-roles` needs the `model-policy` mod. The three mods work alone or together. `pr-review` and `verify-before-pr` use its `model-policy:reviewer` agent so reviews run on Opus.
 - `ship-a-change` runs `verify-before-pr`, `pr-review` and `address-review-findings`. `verify-before-pr` writes the PR description with `git-messages`.
 
 ## Make it yours
 
 - **Writing rules:** edit `CLAUDE.md` to change what applies to every conversation.
 - **Brand color:** change `--accent` in your project's CSS. Every `web-ui` component follows it. See `skills/web-ui/references/setup.md`.
+- **Model policy:** type `/model-policy off` to turn it off for one session. Edit `mods/model-policy/hooks/policy.ts` to change which models it picks or which files the main session may write, then run `/reload-plugins`.
+- **New mods:** add a folder under `mods/` and list it in `.claude-plugin/marketplace.json`.
 - **New skills:** add a folder with a `SKILL.md` under `skills/`, then run the install script again.
 
 ## License

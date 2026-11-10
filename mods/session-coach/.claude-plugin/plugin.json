@@ -1,0 +1,33 @@
+{
+  "name": "session-coach",
+  "version": "0.1.0",
+  "author": { "name": "Asarel Castellanos" },
+  "description": "Suggests /clear when a prompt starts a new task, and budgets workflow agents.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "clearHintMinContextPercent": {
+      "type": "number",
+      "title": "Clear hint: minimum context percent",
+      "description": "Only suggest /clear when the context window is at least this percent full.",
+      "default": 20
+    },
+    "idleMinutes": {
+      "type": "number",
+      "title": "Clear hint: idle minutes",
+      "description": "A prompt sent after this many idle minutes counts as a new task without asking a model.",
+      "default": 30
+    },
+    "useModelCheck": {
+      "type": "boolean",
+      "title": "Clear hint: ask a small model",
+      "description": "Ask a small model (haiku) whether a prompt starts a new task. Costs one short call per checked prompt.",
+      "default": true
+    },
+    "workflowAgentCap": {
+      "type": "number",
+      "title": "Workflow agent cap",
+      "description": "Most agents one workflow run may start. 0 means no cap.",
+      "default": 12
+    }
+  }
+}

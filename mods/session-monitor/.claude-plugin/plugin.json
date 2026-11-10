@@ -1,0 +1,7 @@
+{
+  "name": "session-monitor",
+  "version": "0.1.0",
+  "author": { "name": "Asarel Castellanos" },
+  "description": "Sidebar pane showing subagents, subscription usage, context fill, cost and session time, plus a compact status line.",
+  "types": "./types/index.d.ts"
+}

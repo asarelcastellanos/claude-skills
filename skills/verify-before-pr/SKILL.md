@@ -21,7 +21,7 @@ For a bug fix, reproduce the bug before the fix and show it gone after. Confirm 
 
 ## 3. Get a fresh-context review
 
-Spawn a subagent that has not seen your work. Give it the diff against the base branch and the stated intent of the change. Tell it to follow the `pr-review` skill. Do not give it your reasoning or your opinion of the code. Then follow the `address-review-findings` skill for what it reports.
+Spawn a `model-policy:reviewer` agent that has not seen your work. It runs on Opus. If that type isn't available, start the description with `review`. Give it the diff against the base branch and the stated intent of the change. Tell it to follow the `pr-review` skill. Do not give it your reasoning or your opinion of the code. Then follow the `address-review-findings` skill for what it reports.
 
 ## 4. Simplify the diff
 

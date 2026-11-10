@@ -1,0 +1,7 @@
+{
+	"name": "model-policy",
+	"version": "0.1.0",
+	"author": { "name": "Asarel Castellanos" },
+	"description": "Opus plans, supervises, and reviews. Sonnet writes code and runs every subagent task except review.",
+	"types": "./types/index.d.ts"
+}

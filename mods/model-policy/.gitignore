@@ -1,0 +1,2 @@
+# The engine writes API typings here on every load.
+.claude-plugin/types/

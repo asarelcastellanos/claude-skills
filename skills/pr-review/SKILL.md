@@ -35,7 +35,7 @@ Read the intent. Read the code around the diff, including callers of changed fun
 
 ## Phase 2. Find candidate bugs in parallel
 
-Spawn finder subagents at the same time. Give each one the diff, the intent, and one lens:
+Spawn finder subagents at the same time. Use the `model-policy:reviewer` agent type so they run on Opus under the `model-roles` skill. If that type isn't available, start each description with `review`, for example `review: logic lens`. Give each one the diff, the intent, and one lens:
 
 1. Logic and edge cases. Off-by-one errors, null or empty input, wrong conditions, unhandled states.
 2. Integration. Callers, contracts, and schemas that the change breaks.
@@ -49,7 +49,7 @@ Each candidate needs a file and line, the defect in one sentence, and a concrete
 
 ## Phase 3. Verify
 
-For each candidate, spawn verifier subagents with fresh context. Give them the finding and access to the code. Do not give them the finder's reasoning. Each verifier votes CONFIRMED, REFUTED, or UNSURE with a one-line reason.
+For each candidate, spawn verifier subagents with fresh context. Use `model-policy:reviewer` for them too. Give them the finding and access to the code. Do not give them the finder's reasoning. Each verifier votes CONFIRMED, REFUTED, or UNSURE with a one-line reason.
 
 Keep a finding only if a majority votes CONFIRMED. With one verifier, keep it only if that verifier votes CONFIRMED.
 
