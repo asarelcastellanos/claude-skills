@@ -31,6 +31,10 @@ const daysAtom = atom({ plugin: 'model-policy', key: 'days' } as const, {} as Re
 // What the last flush wrote, so an idle timer tick writes nothing.
 let lastFlushed = ''
 
+// Set while a continuing session.end resets the tally and writes the snapshot. In that window
+// $.session.id() still returns the old id, so a flush would write the new tally under the old key.
+let ending = false
+
 // The tally counts input + output tokens as "tokens". Cache reads and writes are
 // kept apart as "cache", because they are billed and sized differently.
 function statusLine(enabled: boolean, usage: ModelPolicyUsage): string {
@@ -86,14 +90,14 @@ async function flush($: EngineInterface, sessionId: string): Promise<void> {
 // The timer's callback. A failed flush must not stop the interval.
 async function tick($: EngineInterface): Promise<void> {
 	try {
-		await flush($, await $.session.id())
+		if (!ending) await flush($, await $.session.id())
 	} catch {
 		// The next tick tries again.
 	}
 }
 
 async function week($: EngineInterface): Promise<string> {
-	await flush($, await $.session.id())
+	if (!ending) await flush($, await $.session.id())
 	const today = dayKey(await $.clock.now())
 	const days: Record<string, ModelPolicyDay> = {}
 	for (const key of await $.store.keys()) {
@@ -138,24 +142,29 @@ export const register: Register = (on, options) => {
 			}
 			return next(e)
 		}
-		let snapshot: Record<string, ModelPolicyDay> = {}
+		ending = true
 		try {
-			await update($, daysAtom, old => {
-				snapshot = old
-				return {}
-			})
-			await update($, usageAtom, () => ({}))
-			await update($, agentsAtom, () => ({}))
-			lastFlushed = ''
-			await refresh($)
-		} catch {
-			// Fall through to the write: the old tally still belongs to the ending session.
-		}
-		try {
-			for (const [date, log] of Object.entries(snapshot)) await $.store.set(dayStoreKey(date, e.sessionId), log)
-			await prune($, dayKey(await $.clock.now()))
-		} catch {
-			// A failed write loses this tally only.
+			let snapshot: Record<string, ModelPolicyDay> = {}
+			try {
+				await update($, daysAtom, old => {
+					snapshot = old
+					return {}
+				})
+				await update($, usageAtom, () => ({}))
+				await update($, agentsAtom, () => ({}))
+				lastFlushed = ''
+				await refresh($)
+			} catch {
+				// Fall through to the write: the old tally still belongs to the ending session.
+			}
+			try {
+				for (const [date, log] of Object.entries(snapshot)) await $.store.set(dayStoreKey(date, e.sessionId), log)
+				await prune($, dayKey(await $.clock.now()))
+			} catch {
+				// A failed write loses this tally only.
+			}
+		} finally {
+			ending = false
 		}
 		return next(e)
 	})

@@ -104,6 +104,12 @@ describe('classifier prompt', () => {
     expect(isTypedPrompt({ role: 'user', text: '<task-notificationx>' })).toBe(true)
   })
 
+  test('interrupt markers are dropped', () => {
+    expect(isTypedPrompt({ role: 'user', text: '[Request interrupted by user]' })).toBe(false)
+    expect(isTypedPrompt({ role: 'user', text: '[Request interrupted by user for tool use]' })).toBe(false)
+    expect(isTypedPrompt({ role: 'user', text: 'the [Request interrupted by user] text' })).toBe(true)
+  })
+
   test('prompts that start with a tag are kept', () => {
     expect(isTypedPrompt({ role: 'user', text: '<Button> does not render in Safari' })).toBe(true)
     expect(isTypedPrompt({ role: 'user', text: '<div> overflows its parent' })).toBe(true)
@@ -233,6 +239,15 @@ describe('hooks', () => {
       expect(await $.agent.spawn(spawn('r1') as never)).not.toHaveProperty('deny')
     }
     expect(await $.agent.spawn(spawn('r1') as never)).toHaveProperty('deny')
+  })
+
+  test('a resume resets the counters too', { options: { workflowAgentCap: 2 } }, async ($, on) => {
+    on('session.end', () => ({ sessionId: 's' }))
+    on('agent.spawn', () => ({ agentId: 'a', model: 'm' }))
+    for (let i = 0; i < 2; i++) await $.agent.spawn(spawn('r1') as never)
+    expect(await $.agent.spawn(spawn('r1') as never)).toHaveProperty('deny')
+    await $.session.end({ reason: 'resume' } as never)
+    expect(await $.agent.spawn(spawn('r1') as never)).not.toHaveProperty('deny')
   })
 
   test('a cap of 0 never denies', { options: { workflowAgentCap: 0 } }, async ($, on) => {

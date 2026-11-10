@@ -248,7 +248,8 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') {
+    // Both leave this process running under a new session id, with no session.start.
+    if (e.reason === 'clear' || e.reason === 'resume') {
       try {
         await update($, agents, () => [])
       } catch {}

@@ -117,7 +117,8 @@ const SPECIAL_TARGET = /^\/dev\/(?:null|stderr|stdout|tty)$/
 function targetAllowed(raw: string, ctx: PathContext): boolean {
 	let target = raw.replace(/^["']|["']$/g, '')
 	if (SPECIAL_TARGET.test(target)) return true
-	target = target.replace(/^\$\{?TMPDIR\}?/, ctx.tmpdir || '/tmp')
+	// $TMPDIR, ${TMPDIR} and ${TMPDIR:-/tmp}, only as a whole leading path segment.
+	target = target.replace(/^\$(?:TMPDIR|\{TMPDIR(?::?-[^}]*)?\})(?=\/|$)/, ctx.tmpdir || '/tmp')
 	// Any other variable or substitution is unknown, so it is not allowed.
 	if (/[$`]/.test(target)) return false
 	return mainSessionMayWrite(target, ctx.home ?? '', ctx.cwd ?? '/', ctx.tmpdir ?? '')
@@ -140,15 +141,55 @@ function writesFile(source: string): boolean {
 
 const INTERPRETER = /\b(?:python3?|node|ruby|perl|deno|bun)\b/
 
-type Scan = { text: string; quotes: string[]; scripts: string[] }
+type Scan = { text: string; quotes: string[]; scripts: string[]; subs: string[] }
 
 // A quoted token that looks like a path stays visible, so `> "README.md"` is judged by its path.
 // Any other quoted text becomes "Q#<index>", with the text kept in `quotes`.
 const PATH_LIKE = /^[\w./~${}@+-]+$/
 
+// The index just past the `)` that closes a `$(` opened at `open` (the index of the `$`), or the end of
+// the text. It knows quotes, nested parentheses and heredoc bodies, so an apostrophe in a commit message does not end it.
+function substitutionEnd(command: string, open: number): number {
+	const n = command.length
+	let depth = 1
+	let i = open + 2
+	let heredoc: string | undefined
+	while (i < n) {
+		const c = command[i] ?? ''
+		if (c === '\\') i += 2
+		else if (c === "'") {
+			const j = command.indexOf("'", i + 1)
+			i = j < 0 ? n : j + 1
+		} else if (c === '"') {
+			let j = i + 1
+			while (j < n && command[j] !== '"') j += command[j] === '\\' ? 2 : 1
+			i = j + 1
+		} else if (c === '<' && command.startsWith('<<', i) && command[i + 2] !== '<' && command[i - 1] !== '<') {
+			const word = /^<<-?[ \t]*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_]\w*))/.exec(command.slice(i))
+			heredoc = word?.[1] ?? word?.[2] ?? word?.[3]
+			i += word ? word[0].length : 2
+		} else if (c === '\n' && heredoc !== undefined) {
+			i++
+			while (i < n) {
+				const j = command.indexOf('\n', i)
+				const line = command.slice(i, j < 0 ? n : j)
+				i = j < 0 ? n : j + 1
+				if (line.trim() === heredoc) break
+			}
+			heredoc = undefined
+		} else {
+			if (c === '(') depth++
+			else if (c === ')' && --depth === 0) return i + 1
+			i++
+		}
+	}
+	return n
+}
+
 // One pass over the command. It masks quoted text (`git commit -m "a > b"` has no redirect),
 // drops comments, `$(( ))`, `(( ))` and `[[ ]]`, turns `$(` and backticks into separators,
 // and cuts heredoc bodies out. A body fed to an interpreter is kept in `scripts`, since it is code.
+// The bodies of `$(...)` and backticks inside double quotes go to `subs`, to be checked as commands.
 // A heredoc opener is `<<` or `<<-` and a word, outside quotes. `<<<` is a here-string.
 function scan(command: string): Scan {
 	let out = ''
@@ -156,6 +197,7 @@ function scan(command: string): Scan {
 	let i = 0
 	const quotes: string[] = []
 	const scripts: string[] = []
+	const subs: string[] = []
 	const pending: Array<{ end: string; feeds: boolean }> = []
 	const n = command.length
 	const atWordStart = () => out === '' || /[\s;&|({]$/.test(out)
@@ -171,10 +213,27 @@ function scan(command: string): Scan {
 			out += mask(command.slice(i + 1, j < 0 ? n : j))
 			i = j < 0 ? n : j + 1
 		} else if (c === '"') {
+			// Inside double quotes `$(...)` and backticks still run, so their bodies are commands too.
 			let j = i + 1
-			while (j < n && command[j] !== '"') j += command[j] === '\\' ? 2 : 1
+			while (j < n && command[j] !== '"') {
+				if (command[j] === '\\') j += 2
+				else if (command.startsWith('$(', j) && !command.startsWith('$((', j)) {
+					const end = substitutionEnd(command, j)
+					subs.push(command.slice(j + 2, Math.max(j + 2, end - 1)))
+					j = end
+				} else if (command[j] === '`') {
+					const close = command.indexOf('`', j + 1)
+					subs.push(command.slice(j + 1, close < 0 ? n : close))
+					j = close < 0 ? n : close + 1
+				} else j++
+			}
 			out += mask(command.slice(i + 1, Math.min(j, n)))
 			i = j + 1
+		} else if (command.startsWith('${', i)) {
+			// `${#a}` and `${a:-x}` are one word: a # inside is not a comment.
+			const j = command.indexOf('}', i)
+			out += command.slice(i, j < 0 ? n : j + 1)
+			i = j < 0 ? n : j + 1
 		} else if (c === '#' && atWordStart()) {
 			const j = command.indexOf('\n', i)
 			i = j < 0 ? n : j
@@ -199,8 +258,12 @@ function scan(command: string): Scan {
 			const word = /^(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_]\w*))/.exec(command.slice(k))
 			const end = word?.[1] ?? word?.[2] ?? word?.[3]
 			if (word && end) {
-				pending.push({ end, feeds: INTERPRETER.test(out.slice(lineStart)) })
 				i = k + word[0].length
+				const eol = command.indexOf('\n', i)
+				const after = command.slice(i, eol < 0 ? n : eol)
+				// The body is code when this line runs an interpreter or pipes into one: cat <<EOF | python3 -
+				const feeds = INTERPRETER.test(out.slice(lineStart)) || /\|[^|;&]*?\b(?:python3?|node|ruby|perl|deno|bun)\b/.test(after)
+				pending.push({ end, feeds })
 			} else {
 				out += c
 				i++
@@ -225,12 +288,12 @@ function scan(command: string): Scan {
 			i++
 		}
 	}
-	return { text: out, quotes, scripts }
+	return { text: out, quotes, scripts, subs }
 }
 
 // Segments are simple commands: split on && || ; | newline, a lone &, parentheses.
-// `>&`, `&>` and `2>&1` keep their &.
-const SEGMENT = /\|\||&&|[|;\n()]|(?<![>&])&(?![>&])/
+// `>&`, `&>` and `2>&1` keep their &, and `>|` is a redirect, not a pipe.
+const SEGMENT = /\|\||&&|[;\n()]|(?<!>)\||(?<![>&])&(?![>&])/
 
 const WRAPPERS = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'xargs', 'env', 'nice'])
 const KEYWORDS = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '{', '}', '!'])
@@ -258,7 +321,7 @@ function withoutRedirects(segment: string, ctx: PathContext): { words: string[];
 		.replace(/<<<\s*\S+/g, ' ')
 		.replace(/(?<![<\d])\d*<\s*[^\s<>&|;()]+/g, ' ')
 		.replace(/\d*>&(?:\d+|-)/g, ' ')
-		.replace(/(?:&>>?|\d*>>?\|?)[ \t]*([^\s&|;<>()]+)/g, (_match, target: string) => {
+		.replace(/(?:&>>?|\d*>>?\|?|\d*>&(?![\d-]))[ \t]*([^\s&|;<>()]+)/g, (_match, target: string) => {
 			if (!targetAllowed(target, ctx)) writes = true
 			return ' '
 		})
@@ -283,7 +346,17 @@ function segmentWrites(segment: string, quotes: readonly string[], ctx: PathCont
 	const cmd = (words[at] ?? '').split('/').pop() ?? ''
 	const args = words.slice(at + 1)
 
-	if (cmd === 'sed') return args.some(arg => /^-[A-Za-z]*i/.test(arg) || arg === '--in-place')
+	// find -exec CMD ... ; (or +): the words up to the terminator are a command of their own.
+	if (cmd === 'find') {
+		for (let i = 0; i < args.length; i++) {
+			if (!/^-(?:exec|execdir|ok|okdir)$/.test(args[i] ?? '')) continue
+			const inner: string[] = []
+			for (i++; i < args.length && !/^(?:\\?;|\+|\\)$/.test(args[i] ?? ''); i++) inner.push(args[i] ?? '')
+			if (segmentWrites(inner.join(' '), quotes, ctx)) return true
+		}
+		return false
+	}
+	if (cmd === 'sed') return args.some(arg => /^-[A-Za-z]*i/.test(arg) || arg === '--in-place' || arg.startsWith('--in-place='))
 	// -i alone or in a cluster of switches that take no argument (-pi, -pie, -i.bak). -Mstrict and -I are not it.
 	if (cmd === 'perl' && args.some(arg => /^-[pnalwWsStTuUc]*i[pnalwWsStTuUce]*(?:\.\S*)?$/.test(arg))) return true
 	if (cmd === 'patch') return !args.includes('--dry-run')
@@ -314,11 +387,18 @@ function segmentWrites(segment: string, quotes: readonly string[], ctx: PathCont
 	return false
 }
 
-/** True when the shell command writes a file the main session may not write. */
+/**
+ * True when the shell command writes a file the main session may not write.
+ *
+ * This is a best-effort guard against the main session writing code through the shell. The
+ * model-roles skill is the primary rule. Known gaps: `sh -c` and `bash -c` strings, `dd of=`,
+ * `curl -o`, `git checkout` and `git restore`, and PowerShell.
+ */
 export function isFileWrite(command: string, ctx: PathContext = {}): boolean {
-	const { text, quotes, scripts } = scan(command)
+	const { text, quotes, scripts, subs } = scan(command)
 	// python - <<'PY' ... PY and the like: the body is code.
 	if (scripts.some(writesFile)) return true
+	if (subs.some(sub => isFileWrite(sub, ctx))) return true
 	return text.split(SEGMENT).some(segment => segmentWrites(segment, quotes, ctx))
 }
 

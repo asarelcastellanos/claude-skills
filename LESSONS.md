@@ -4,8 +4,8 @@ Mistakes worth remembering, newest first. Step 8 of the `ship-a-change` skill ad
 
 ## 2026-11-10: Shell-write detection built from regexes keeps breaking
 - What happened: `isFileWrite` in the `model-policy` mod matched shell syntax with regexes. Review round 1 found ten false positives and misses. Round 2 found four more: chained commands, redirects read as file names, and `<<` inside quotes or arithmetic.
-- Caught by: review rounds 1 and 2
-- Fix: split commands into simple commands before checking, with a test for every command a review reported. If a third round finds more, replace the regexes with a real shell tokenizer.
+- Caught by: review rounds 1, 2, and 3. Round 3 ran about 280 commands and found six more writes that got through.
+- Fix: a table-driven regression test holds every command any review reported. The check is now labeled best-effort, and the `model-roles` skill is the primary rule. Proposed lasting fix, for a follow-up PR: replace the regexes with a small shell tokenizer bundled into the mod.
 
 ## 2026-11-10: A skill and the code it describes said different things
 - What happened: the `model-roles` skill and `reviewer.md` said reviews run on Sonnet while `policy.ts` still sent them to Opus. The Markdown changed first and the code change waited for a later round.

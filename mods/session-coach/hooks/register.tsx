@@ -102,7 +102,8 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') {
+    // A resume also continues the process under another session id with no session.start.
+    if (e.reason === 'clear' || e.reason === 'resume') {
       latestPrompt += 1
       await update($, coach, () => initialCoach)
     }

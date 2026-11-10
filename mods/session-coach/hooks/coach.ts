@@ -125,6 +125,9 @@ export const INJECTED_TAGS = [
   'tool_use_error',
 ] as const
 
+/** Plain-text marker the engine injects as a user row when the person interrupts. */
+export const INTERRUPT_PREFIX = '[Request interrupted by user'
+
 const INJECTED_START = new RegExp(`^<(${INJECTED_TAGS.join('|')})(\\s|>|$)`)
 
 /**
@@ -135,7 +138,11 @@ export function isTypedPrompt(row: { role: string; text: string }): boolean {
   if (row.role !== 'user') return false
   const text = row.text.trim()
 
-  return text !== '' && !INJECTED_START.test(text)
+  return (
+    text !== '' &&
+    !INJECTED_START.test(text) &&
+    !text.startsWith(INTERRUPT_PREFIX)
+  )
 }
 
 /** The last `count` typed user prompts, leaving out the new prompt if it is already stored. */
