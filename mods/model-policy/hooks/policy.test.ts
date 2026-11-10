@@ -327,6 +327,29 @@ test('session.start writes usage once, so other plugins can tell the mod is inst
 	expect(statuses).toEqual([])
 })
 
+test('a failed first write to usage still starts the flush timer and the session', async ($, on) => {
+	const world = engineTools(on)
+	// A small state store whose writes fail until the test lets them through.
+	const held = new Map<string, { value: unknown; version: number }>()
+	let failing = true
+	on('state.get', (_, e) => ({ value: held.get(`${e.plugin}/${e.key}`) ?? { value: undefined, version: 0 } }))
+	on('state.set', (_, e) => {
+		// Every write misses its version, so `update` gives up and throws.
+		if (failing) return { value: { isSet: false, version: 99 } }
+		const version = (held.get(`${e.plugin}/${e.key}`)?.version ?? 0) + 1
+		held.set(`${e.plugin}/${e.key}`, { value: e.value, version })
+		return { value: { isSet: true, version } }
+	})
+
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+	failing = false
+	await turn($, { model: 'claude-sonnet-5-5', input_tokens: 60, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+	// Only the timer flushes the day to the store.
+	await world.clock.advance(31_000)
+
+	expect([...world.kv.keys()].some(k => k.startsWith('day-'))).toBe(true)
+})
+
 test('Sonnet at most: haiku types and explicit haiku are kept', async ($, on) => {
 	engineSpawn(on)
 	engineTools(on)

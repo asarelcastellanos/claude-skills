@@ -111,10 +111,15 @@ export const register: Register = (on, options) => {
 			description: 'Show or toggle the model policy: /model-policy [on|off|week]',
 		})
 		await prune($, dayKey(await $.clock.now()))
-		// Writing the tally back unchanged is the first write to `usage`. session-monitor reads that
-		// version to learn this mod is installed before it draws its Policy section.
-		await update($, usageAtom, usage => usage)
 		$.clock.every(FLUSH_MS, () => void tick($))
+		// Writing the tally back unchanged is the first write to `usage`. session-monitor reads that
+		// version to learn this mod is installed before it draws its Policy section. A failed write
+		// only hides that section: the timer above is already set and the session starts.
+		try {
+			await update($, usageAtom, usage => usage)
+		} catch {
+			// The first turn writes `usage` again.
+		}
 		return next(e)
 	})
 
