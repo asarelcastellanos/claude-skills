@@ -92,7 +92,7 @@ git clone https://github.com/asarelcastellanos/claude-workbench.git ~/claude-wor
 | Windows (PowerShell) | `~/claude-workbench/install.ps1` |
 | macOS or Linux | `bash ~/claude-workbench/install.sh` |
 
-The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. If the `claude` CLI is installed, the script also adds this repo as a plugin marketplace and installs every mod in `mods/`. Claude Code reads the mods from this folder, so after a `git pull` or an edit, run `/reload-plugins` in a session. Running the script again is safe.
+The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. If the `claude` CLI is installed, the script also adds every folder in `mods/` to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`, and removes any copy of the mods installed from a marketplace. Claude Code then loads the mods straight from this folder. A saved edit reloads in a running session, and after a `git pull` you run `/reload-plugins`. Like the skills, the mods follow the branch you have checked out. The settings change applies to sessions started after the script runs. Running the script again is safe. On macOS and Linux the script needs `python3` to edit `settings.json`.
 
 The skills are links, not copies, so `git pull` updates them. You don't need to reinstall.
 
@@ -122,7 +122,7 @@ Most skills stand alone. These depend on others:
 - **Writing rules:** edit `CLAUDE.md` to change what applies to every conversation.
 - **Brand color:** change `--accent` in your project's CSS. Every `web-ui` component follows it. See `skills/web-ui/references/setup.md`.
 - **Model policy:** type `/model-policy off` to turn it off for one session. Edit `mods/model-policy/hooks/policy.ts` to change which models it picks or which files the main session may write, then run `/reload-plugins`.
-- **New mods:** add a folder under `mods/` and list it in `.claude-plugin/marketplace.json`.
+- **New mods:** add a folder under `mods/`, list it in `.claude-plugin/marketplace.json`, and run the install script again.
 - **New skills:** add a folder with a `SKILL.md` under `skills/`, then run the install script again.
 
 ## License
