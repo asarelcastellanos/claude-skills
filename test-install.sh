@@ -4,16 +4,19 @@
 # Usage: bash test-install.sh
 set -uo pipefail
 
-repo="$(cd "$(dirname "$0")" && pwd -P)"
+self="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
+repo="$(dirname "$self")"
 for tool in claude python3; do
 	command -v "$tool" >/dev/null 2>&1 || { echo "$tool not found, it is required to run this test." >&2; exit 2; }
 done
 
-root="$(mktemp -d)"
-trap 'rm -rf "$root"' EXIT
-
-# Keep the run offline and keep the caller's plugin setup out of it.
-unset CLAUDE_CODE_PLUGIN_DIRS ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+# Each case runs in its own bash under env -i (see run_case). That child gets the root from the parent.
+if [ "${1:-}" = "--case" ]; then
+	root="$2"
+else
+	root="$(mktemp -d)"
+	trap 'chmod -R u+w "$root" 2>/dev/null; rm -rf "$root"' EXIT
+fi
 
 old_marketplace="asarel-claude-skills"
 
@@ -92,6 +95,33 @@ install_copies() {
 	for name in "$@"; do
 		claude plugin install "$name@claude-workbench" --scope user >/dev/null
 	done
+	assert_installs_in_sandbox
+}
+
+# Every marketplace install must live under this case's folder, never in a real config.
+assert_installs_in_sandbox() {
+	local bad physical
+	physical="$(cd "$T" && pwd -P)"
+	bad="$(claude plugin list --json | python3 -I -c 'import json, sys
+roots = sys.argv[1:]
+for e in json.load(sys.stdin):
+	if not e["id"].endswith("@inline") and not any(e["installPath"].startswith(r) for r in roots):
+		print(e["id"], e["installPath"])' "$T" "$physical")"
+	[ -z "$bad" ] || die "installs outside the case root: $bad"
+}
+
+# "<name> <installPath>" for every plugin loaded from CLAUDE_CODE_PLUGIN_DIRS.
+inline_paths() {
+	claude plugin list --json | python3 -I -c 'import json, sys
+for e in json.load(sys.stdin):
+	if e["id"].endswith("@inline"):
+		print(e["id"].split("@")[0], e["installPath"])' | sort
+}
+
+# make_mod <folder> <name>: the smallest folder Claude Code loads as a plugin.
+make_mod() {
+	mkdir -p "$1/.claude-plugin"
+	echo "{\"name\":\"$2\",\"version\":\"0.0.1\"}" >"$1/.claude-plugin/plugin.json"
 }
 
 # A copy of this repo's marketplace under the name it had before the rename.
@@ -128,11 +158,15 @@ case_fresh_install() {
 	run_installer
 	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
 	assert_eq "$(settings_dirs | sort)" "$(expected_dirs)" "env.CLAUDE_CODE_PLUGIN_DIRS"
-	local ids name count
+	local ids name count expected=""
 	ids="$(list_ids)"
-	for name in $(mod_names); do assert_has "$ids" "$name@inline"; done
+	for name in $(mod_names); do
+		assert_has "$ids" "$name@inline"
+		expected="$expected$name $repo/mods/$name"$'\n'
+	done
 	count="$(grep -c '@inline$' <<<"$ids")"
 	assert_eq "$count" "$(mod_names | wc -l | tr -d ' ')" "number of @inline plugins"
+	assert_eq "$(inline_paths)" "$(printf '%s' "$expected" | sort)" "installPath of each @inline plugin"
 }
 
 case_second_run_identical() {
@@ -153,6 +187,7 @@ case_marketplace_copies_removed() {
 	install_copies model-policy session-coach
 	add_old_marketplace
 	claude plugin install "session-monitor@$old_marketplace" --scope user >/dev/null
+	assert_installs_in_sandbox
 	local ids
 	ids="$(list_ids)"
 	assert_has "$ids" "model-policy@claude-workbench"
@@ -180,26 +215,34 @@ JSON
 	assert_eq "$(pyj "$settings" 's["theme"]')" "dark" "theme"
 	assert_eq "$(pyj "$settings" 's["permissions"]["allow"]')" "['Bash(ls)']" "permissions"
 	assert_eq "$(pyj "$settings" 's["env"]["FOO"]')" "bar" "env.FOO"
-	assert_eq "$(settings_dirs | head -1)" "/foreign/plugins/thing" "foreign entry stays first"
-	assert_eq "$(settings_dirs | sort | grep -vxF /foreign/plugins/thing)" "$(expected_dirs)" "our entries"
+	assert_eq "$(settings_dirs | head -3)" "$(expected_dirs)" "our entries come first"
+	assert_eq "$(settings_dirs | tail -1)" "/foreign/plugins/thing" "foreign entry stays after ours"
 }
 
 case_stale_entries_removed() {
 	new_env
-	mkdir -p "$T/other/mods/session-monitor" "$T/foreign/session-monitor" "$T/foreign/mods/other-mod"
-	local list="$T/other/mods/session-monitor:$T/gone/mods/model-policy:~/clone/mods/session-coach/:$T/foreign/session-monitor:$T/foreign/mods/other-mod"
+	# Two other clones of this repo (they hold the marketplace manifest), one under each marketplace name.
+	local c
+	for c in clone-a:claude-workbench clone-b:asarel-claude-skills; do
+		mkdir -p "$T/${c%%:*}/.claude-plugin" "$T/${c%%:*}/mods/session-monitor"
+		echo "{\"name\":\"${c##*:}\"}" >"$T/${c%%:*}/.claude-plugin/marketplace.json"
+	done
+	# A folder of the user's own that happens to share a mod name, and an unrelated plugin.
+	mkdir -p "$T/mine/mods/session-monitor" "$T/foreign/mods/other-mod"
+	local list="$T/clone-a/mods/session-monitor:$T/clone-b/mods/session-monitor:$T/gone/mods/model-policy:~/clone/mods/session-coach/:$T/mine/mods/session-monitor:$T/foreign/mods/other-mod"
 	echo "{\"env\":{\"CLAUDE_CODE_PLUGIN_DIRS\":\"$list\"}}" >"$settings"
 	run_installer
 	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
 	local dirs
 	dirs="$(settings_dirs)"
-	assert_lacks "$dirs" "$T/other/mods/session-monitor"
+	assert_lacks "$dirs" "$T/clone-a"
+	assert_lacks "$dirs" "$T/clone-b"
 	assert_lacks "$dirs" "$T/gone/mods/model-policy"
 	assert_lacks "$dirs" "~/clone/mods/session-coach"
-	assert_has "$dirs" "$T/foreign/session-monitor"
-	assert_has "$dirs" "$T/foreign/mods/other-mod"
-	assert_has "$out" "removed $T/other/mods/session-monitor"
-	assert_eq "$(sort <<<"$dirs" | grep -vF "$T/foreign")" "$(expected_dirs)" "our entries"
+	assert_has "$out" "removed $T/clone-a/mods/session-monitor"
+	assert_has "$out" "removed $T/gone/mods/model-policy"
+	assert_eq "$(sed -n '1,3p' <<<"$dirs")" "$(expected_dirs)" "our entries come first"
+	assert_eq "$(sed -n '4,$p' <<<"$dirs")" "$T/mine/mods/session-monitor"$'\n'"$T/foreign/mods/other-mod" "kept entries and their order"
 }
 
 case_equivalent_spellings_not_duplicated() {
@@ -208,12 +251,10 @@ case_equivalent_spellings_not_duplicated() {
 	local first second
 	first="$(mod_names | sed -n 1p)"
 	second="$(mod_names | sed -n 2p)"
-	echo "{\"env\":{\"CLAUDE_CODE_PLUGIN_DIRS\":\"$T/link/mods/$first/:$repo/mods/$second/\"}}" >"$settings"
+	echo "{\"env\":{\"CLAUDE_CODE_PLUGIN_DIRS\":\"$repo/mods/$second/:$repo/mods/$first:$T/link/mods/$first/:$repo/mods/$first/\"}}" >"$settings"
 	run_installer
 	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
-	assert_eq "$(settings_dirs | wc -l | tr -d ' ')" "$(mod_names | wc -l | tr -d ' ')" "entry count"
-	assert_has "$(settings_dirs)" "$T/link/mods/$first/"
-	assert_lacks "$(settings_dirs)" "$repo/mods/$first"
+	assert_eq "$(settings_dirs)" "$(expected_dirs)" "each of our paths once, in order"
 }
 
 case_invalid_json_changes_nothing() {
@@ -387,13 +428,188 @@ case_empty_mods_folder() {
 	[ ! -e "$settings" ] || assert_lacks "$(cat "$settings")" "CLAUDE_CODE_PLUGIN_DIRS"
 }
 
+# A ~/ spelling of our own path (the repo sits under $HOME) is the same entry, so it is not listed twice.
+case_tilde_spelling_is_one_entry() {
+	new_env
+	make_repo "$HOME/clone"
+	make_mod "$HOME/clone/mods/alpha" alpha
+	echo '{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"~/clone/mods/alpha"}}' >"$settings"
+	run_installer "$HOME/clone/install.sh"
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_eq "$(settings_dirs)" "$(cd "$HOME/clone" && pwd -P)/mods/alpha" "one entry"
+}
+
+case_our_paths_first_and_same_named_foreign_kept() {
+	new_env
+	mkdir -p "$T/foreign/mods/model-policy" "$T/foreign/other"
+	echo "{\"env\":{\"CLAUDE_CODE_PLUGIN_DIRS\":\"$T/foreign/mods/model-policy:$T/foreign/other\"}}" >"$settings"
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_eq "$(settings_dirs | sed -n '1,3p')" "$(expected_dirs)" "our entries come first"
+	assert_eq "$(settings_dirs | sed -n '4,$p')" "$T/foreign/mods/model-policy"$'\n'"$T/foreign/other" "foreign entries keep their order"
+	assert_eq "$(inline_paths | grep '^model-policy ')" "model-policy $repo/mods/model-policy" "the repo's model-policy is the one loaded"
+}
+
+case_write_failure_keeps_the_copies() {
+	new_env
+	if [ "$(id -u)" -eq 0 ]; then echo "  skipped, a root user can write to a read-only folder"; return 0; fi
+	install_copies model-policy
+	mkdir "$T/ro"
+	mv "$settings" "$T/ro/settings.json"
+	ln -s "$T/ro/settings.json" "$settings"
+	chmod a-w "$T/ro"
+	local before_installed
+	before_installed="$(cksum <"$installed_file")"
+	run_installer
+	chmod u+w "$T/ro"
+	[ "$rc" -ne 0 ] || die "installer exited 0 when settings.json could not be written"
+	assert_has "$out" "could not be written"
+	assert_eq "$(cksum <"$installed_file")" "$before_installed" "installed_plugins.json checksum"
+	assert_has "$(cat "$installed_file")" "model-policy@claude-workbench"
+}
+
+case_old_marketplace_config_and_store_carry() {
+	new_env
+	add_old_marketplace
+	claude plugin install "model-policy@$old_marketplace" --scope user --config mechanicModel=sonnet >/dev/null
+	assert_installs_in_sandbox
+	local store="$CLAUDE_CONFIG_DIR/plugins/store" inline_store
+	mkdir -p "$store"
+	echo '{"day-2026-01-01-abc":{"count":3}}' >"$store/$(store_name "model-policy@$old_marketplace")"
+	inline_store="$store/$(store_name model-policy@inline)"
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_eq "$(pyj "$settings" 's["pluginConfigs"]["model-policy@inline"]["options"]["mechanicModel"]')" "sonnet" "config"
+	assert_eq "$(pyj "$inline_store" 's["day-2026-01-01-abc"]["count"]')" "3" "store"
+	assert_lacks "$(list_ids)" "@$old_marketplace"
+}
+
+# The dirs are already right, so the config copy is the only change and must still be written.
+case_config_only_change_is_written() {
+	new_env
+	install_copies model-policy
+	claude plugin install model-policy@claude-workbench --scope user --config mechanicModel=sonnet >/dev/null
+	DIRS="$(expected_dirs | paste -sd: -)" edit_settings 's["env"] = {"CLAUDE_CODE_PLUGIN_DIRS": __import__("os").environ["DIRS"]}'
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_lacks "$out" "loading the"
+	assert_eq "$(pyj "$settings" 's["pluginConfigs"]["model-policy@inline"]["options"]["mechanicModel"]')" "sonnet" "config"
+}
+
+case_disabled_copy_stays_disabled() {
+	new_env
+	install_copies model-policy
+	claude plugin disable model-policy@claude-workbench --scope user >/dev/null
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_eq "$(pyj "$settings" 's["enabledPlugins"]["model-policy@inline"]')" "False" "enabledPlugins"
+	assert_eq "$(claude plugin list --json | python3 -I -c 'import json, sys
+for e in json.load(sys.stdin):
+	if e["id"] == "model-policy@inline":
+		print(e["enabled"])')" "False" "enabled in the plugin list"
+}
+
+case_failed_uninstall_keeps_the_old_marketplace() {
+	new_env
+	mkdir -p "$T/proj"
+	add_old_marketplace
+	(cd "$T/proj" && claude plugin install "session-coach@$old_marketplace" --scope project >/dev/null)
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_has "$out" "kept the $old_marketplace marketplace registered"
+	assert_has "$out" "claude plugin marketplace remove $old_marketplace"
+	assert_has "$(claude plugin marketplace list --json)" "\"name\": \"$old_marketplace\""
+	# From the project folder the uninstall works, and then the marketplace goes too.
+	cd "$T/proj"
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc from the project folder: $out"
+	assert_has "$out" "removed the $old_marketplace marketplace"
+	assert_lacks "$(claude plugin marketplace list --json)" "\"name\": \"$old_marketplace\""
+}
+
+case_store_carry_failure_keeps_the_copy() {
+	new_env
+	install_copies model-policy
+	local store="$CLAUDE_CONFIG_DIR/plugins/store" target
+	mkdir -p "$store"
+	echo '{"day-2026-01-01-abc":{"count":1}}' >"$store/$(store_name model-policy@claude-workbench)"
+	target="$store/$(store_name model-policy@inline)"
+	mkdir "$target"
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	assert_has "$out" "could not carry the model-policy@claude-workbench plugin data from $store/$(store_name model-policy@claude-workbench) to $target"
+	assert_has "$(list_ids)" "model-policy@claude-workbench"
+	rmdir "$target"
+	run_installer
+	[ "$rc" -eq 0 ] || die "installer exited $rc on the re-run: $out"
+	assert_lacks "$(list_ids)" "model-policy@claude-workbench"
+	assert_eq "$(pyj "$target" 's["day-2026-01-01-abc"]["count"]')" "1" "store after the re-run"
+}
+
+case_worktree_is_refused() {
+	new_env
+	local main="$T/main"
+	make_repo "$main"
+	make_mod "$main/mods/alpha" alpha
+	git -C "$main" init -q
+	git -C "$main" add -A
+	git -C "$main" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -q -m init
+	git -C "$main" worktree add -q "$T/wt"
+	run_installer "$T/wt/install.sh"
+	[ "$rc" -ne 0 ] || die "installer exited 0 in a linked worktree"
+	assert_has "$out" "linked git worktree"
+	[ ! -e "$HOME/.claude/skills" ] || die "the worktree run linked skills"
+	run_installer "$main/install.sh"
+	[ "$rc" -eq 0 ] || die "installer exited $rc in the main checkout: $out"
+}
+
+# Another program edits settings.json while the plugin list runs. The edit must survive.
+case_concurrent_edit_is_kept() {
+	new_env
+	echo '{"theme":"dark"}' >"$settings"
+	mkdir -p "$T/bin"
+	local real
+	real="$(command -v claude)"
+	cat >"$T/bin/claude" <<STUB
+#!/bin/sh
+if [ "\$1" = plugin ] && [ "\$2" = list ] && [ ! -e "$T/hooked" ]; then
+	: >"$T/hooked"
+	python3 -I -c 'import json, sys
+p = sys.argv[1]
+s = json.load(open(p))
+s["concurrent"] = True
+json.dump(s, open(p, "w"))' "$settings"
+fi
+exec "$real" "\$@"
+STUB
+	chmod +x "$T/bin/claude"
+	out="$(PATH="$T/bin:$PATH" bash "$repo/install.sh" 2>&1)" && rc=0 || rc=$?
+	[ "$rc" -eq 0 ] || die "installer exited $rc: $out"
+	[ -e "$T/hooked" ] || die "the claude stub never ran"
+	assert_eq "$(pyj "$settings" 's["concurrent"]')" "True" "the concurrent edit"
+	assert_eq "$(pyj "$settings" 's["theme"]')" "dark" "theme"
+	assert_eq "$(settings_dirs | sort)" "$(expected_dirs)" "dirs"
+}
+
 # ---- runner ----
+
+# A child run: execute one case and exit. The parent starts it under env -i.
+if [ "${1:-}" = "--case" ]; then
+	( set -e; "$3" )
+	exit $?
+fi
 
 passed=0
 failed=0
 run_case() {
-	local label="$1" fn="$2" log="$root/log.$2"
-	( set -e; "$fn" ) >"$log" 2>&1
+	local label="$1" fn="$2" log="$root/log.$2" v
+	# Only these variables reach a case, so CLAUDE_CODE_PLUGIN_CACHE_DIR, XDG_*, provider keys and
+	# base URLs from the caller cannot leak in. HOME and CLAUDE_CONFIG_DIR point into the root.
+	local allowed=()
+	for v in PATH TMPDIR TERM LANG USER LOGNAME SHELL $(compgen -e | grep '^LC_' || true); do
+		if [ -n "${!v+x}" ]; then allowed+=("$v=${!v}"); fi
+	done
+	env -i "${allowed[@]}" HOME="$root/nohome" CLAUDE_CONFIG_DIR="$root/nohome/.claude" bash "$self" --case "$root" "$fn" >"$log" 2>&1
 	local code=$?
 	if [ "$code" -eq 0 ]; then
 		echo "PASS $label"
@@ -409,8 +625,8 @@ run_case "fresh install sets the mod paths and loads each mod as @inline" case_f
 run_case "second run leaves settings.json byte-identical" case_second_run_identical
 run_case "marketplace copies (current and old marketplace) are removed" case_marketplace_copies_removed
 run_case "unrelated settings keys and a foreign plugin dir survive" case_unrelated_settings_survive
-run_case "stale entries for other clones of a mod are removed" case_stale_entries_removed
-run_case "equivalent spellings of our paths are not duplicated" case_equivalent_spellings_not_duplicated
+run_case "entries in other clones and missing mod folders are removed, others kept" case_stale_entries_removed
+run_case "duplicate spellings of our paths collapse to one, in order" case_equivalent_spellings_not_duplicated
 run_case "invalid JSON exits non-zero and changes nothing" case_invalid_json_changes_nothing
 run_case "non-object settings, env and dirs change nothing" case_bad_settings_shape_changes_nothing
 run_case "a python3 that does not run changes nothing" case_python_that_does_not_run
@@ -422,6 +638,16 @@ run_case "the engine reads the key the installer copies the config to" case_engi
 run_case "a settings.json with a BOM parses and is written without one" case_bom_file_parses
 run_case "the skills backup path is printed before a later failure" case_backup_path_is_printed_before_a_failure
 run_case "a repo path with a colon is rejected" case_colon_in_path_is_rejected
+run_case "a ~/ spelling of our own path is kept as one entry" case_tilde_spelling_is_one_entry
+run_case "our paths come first and a same-named foreign plugin is kept after them" case_our_paths_first_and_same_named_foreign_kept
+run_case "a settings write failure keeps the marketplace copies" case_write_failure_keeps_the_copies
+run_case "config and store from the old marketplace carry to @inline" case_old_marketplace_config_and_store_carry
+run_case "a config-only change is written when the dirs are already right" case_config_only_change_is_written
+run_case "a disabled marketplace copy stays disabled as @inline" case_disabled_copy_stays_disabled
+run_case "a failed uninstall keeps the old marketplace registered" case_failed_uninstall_keeps_the_old_marketplace
+run_case "a store that cannot be carried keeps the marketplace copy" case_store_carry_failure_keeps_the_copy
+run_case "a linked worktree is refused" case_worktree_is_refused
+run_case "an edit made to settings.json during the run is kept" case_concurrent_edit_is_kept
 run_case "an empty mods folder is skipped" case_empty_mods_folder
 
 echo
