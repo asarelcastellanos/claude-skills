@@ -35,13 +35,6 @@ let lastFlushed = ''
 // $.session.id() still returns the old id, so a flush would write the new tally under the old key.
 let ending = false
 
-// The tally counts input + output tokens as "tokens". Cache reads and writes are
-// kept apart as "cache", because they are billed and sized differently.
-function statusLine(enabled: boolean, usage: ModelPolicyUsage): string {
-	const parts = FAMILIES.filter(f => (usage[f]?.tokens ?? 0) > 0).map(f => `${f} ${compact(usage[f]?.tokens ?? 0)}`)
-	return [`policy ${enabled ? 'on' : 'off'}`, ...parts].join(' · ')
-}
-
 function table(enabled: boolean, usage: ModelPolicyUsage): string {
 	const total = FAMILIES.reduce((sum, f) => sum + (usage[f]?.tokens ?? 0), 0)
 	const rows = FAMILIES.filter(f => usage[f]).map(f => {
@@ -65,11 +58,6 @@ async function fiveHour($: EngineInterface): Promise<number | undefined> {
 	} catch {
 		return undefined
 	}
-}
-
-// Hooks pass `$` to declared functions; the engine follows `$` only into top-level functions.
-async function refresh($: EngineInterface): Promise<void> {
-	$.ui.status(statusLine(await read($, enabledAtom), await read($, usageAtom)))
 }
 
 async function prune($: EngineInterface, today: string): Promise<void> {
@@ -123,8 +111,15 @@ export const register: Register = (on, options) => {
 			description: 'Show or toggle the model policy: /model-policy [on|off|week]',
 		})
 		await prune($, dayKey(await $.clock.now()))
-		await refresh($)
 		$.clock.every(FLUSH_MS, () => void tick($))
+		// Writing the tally back unchanged is the first write to `usage`. session-monitor reads that
+		// version to learn this mod is installed before it draws its Policy section. A failed write
+		// only hides that section: the timer above is already set and the session starts.
+		try {
+			await update($, usageAtom, usage => usage)
+		} catch {
+			// The first turn writes `usage` again.
+		}
 		return next(e)
 	})
 
@@ -153,7 +148,6 @@ export const register: Register = (on, options) => {
 				await update($, usageAtom, () => ({}))
 				await update($, agentsAtom, () => ({}))
 				lastFlushed = ''
-				await refresh($)
 			} catch {
 				// Fall through to the write: the old tally still belongs to the ending session.
 			}
@@ -174,7 +168,6 @@ export const register: Register = (on, options) => {
 		if (arg === 'week') return { text: await week($) }
 		if (arg === 'on' || arg === 'off') await update($, enabledAtom, () => arg === 'on')
 		else if (arg !== '') return { text: 'Usage: /model-policy [on|off|week]' }
-		await refresh($)
 		return { text: table(await read($, enabledAtom), await read($, usageAtom)) }
 	})
 
@@ -272,7 +265,6 @@ export const register: Register = (on, options) => {
 				copy[date] = addTurn(copy[date] ?? emptyDay(), f, tokens, cache, type)
 				return copy
 			})
-			await refresh($)
 		}
 		return next(e)
 	})

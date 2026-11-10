@@ -72,6 +72,7 @@ function engineTools(on: On) {
 	})
 	on('store.keys', () => ({ value: [...kv.keys()] }))
 	const clock = mock.clock(on, { now: NOON })
+	// The mod no longer sets a status line: a call here is recorded so a test can assert none came.
 	on('ui.status', (_, e) => {
 		statuses.push(e.text)
 		return { value: undefined }
@@ -308,8 +309,45 @@ test('turn.complete adds usage to the tally and passes the turn through', async 
 	await turn($, { model: 'claude-sonnet-5-5', input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0 })
 
 	const shown = await slash($, '')
-	expect(statuses.at(-1)).toBe('policy on · sonnet 2k')
+	expect(statuses).toEqual([])
 	expect(shown.text).toMatch(/sonnet\s+2k tokens\s+100%\s+cache 9k/)
+})
+
+test('session.start writes usage once, so other plugins can tell the mod is installed', async ($, on) => {
+	const statuses = engineTools(on)
+	const writes: Array<{ plugin: string; key: string; value: unknown }> = []
+	on('state.set', (_, e) => {
+		writes.push({ plugin: e.plugin, key: e.key, value: e.value })
+		return { value: { isSet: true, version: writes.length } }
+	})
+
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+
+	expect(writes).toEqual([{ plugin: 'model-policy', key: 'usage', value: {} }])
+	expect(statuses).toEqual([])
+})
+
+test('a failed first write to usage still starts the flush timer and the session', async ($, on) => {
+	const world = engineTools(on)
+	// A small state store whose writes fail until the test lets them through.
+	const held = new Map<string, { value: unknown; version: number }>()
+	let failing = true
+	on('state.get', (_, e) => ({ value: held.get(`${e.plugin}/${e.key}`) ?? { value: undefined, version: 0 } }))
+	on('state.set', (_, e) => {
+		// Every write misses its version, so `update` gives up and throws.
+		if (failing) return { value: { isSet: false, version: 99 } }
+		const version = (held.get(`${e.plugin}/${e.key}`)?.version ?? 0) + 1
+		held.set(`${e.plugin}/${e.key}`, { value: e.value, version })
+		return { value: { isSet: true, version } }
+	})
+
+	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
+	failing = false
+	await turn($, { model: 'claude-sonnet-5-5', input_tokens: 60, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+	// Only the timer flushes the day to the store.
+	await world.clock.advance(31_000)
+
+	expect([...world.kv.keys()].some(k => k.startsWith('day-'))).toBe(true)
 })
 
 test('Sonnet at most: haiku types and explicit haiku are kept', async ($, on) => {

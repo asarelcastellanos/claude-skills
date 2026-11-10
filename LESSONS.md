@@ -2,6 +2,11 @@
 
 Mistakes worth remembering, newest first. Step 8 of the `ship-a-change` skill adds entries. When a mistake shows up here twice, it needs a lasting fix instead of a second entry.
 
+## 2026-11-10: Monitor rows overflowed the 40-column dock
+- What happened: rows in the session-monitor pane drew wider than the pane at narrow widths. Each fix covered the rows a review had named, and the next round found others.
+- Caught by: review rounds 1 to 4 of the monitor restyle
+- Fix: tests now render the fixed rows at 23 columns and up. Proposed lasting fix: one shared test helper that renders the whole pane at 23, 30, 34 and 40 columns and fails on any row wider than the pane.
+
 ## 2026-11-10: Shell-write detection built from regexes keeps breaking
 - What happened: `isFileWrite` in the `model-policy` mod matched shell syntax with regexes. Review round 1 found ten false positives and misses. Round 2 found four more: chained commands, redirects read as file names, and `<<` inside quotes or arithmetic.
 - Caught by: review rounds 1, 2, and 3. Round 3 ran about 280 commands and found six more writes that got through.
