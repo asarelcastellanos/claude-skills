@@ -320,6 +320,9 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // A call a plugin raised itself, such as the model picker's AskUserQuestion, is no work of the
+    // model or an agent, so it is not counted.
+    if (next.origin.plugin !== 'engine') return next(e)
     // Bookkeeping never delays or changes the tool call: it starts first, the call runs,
     // and the result waits only for the bookkeeping to finish within this dispatch.
     const bookkeeping = (async () => {

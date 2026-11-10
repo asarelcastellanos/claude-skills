@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ModelPolicyDay, ModelPolicyPick, ModelPolicyUsage } from '../types'
+import type { ModelPolicyDay, ModelPolicyUsage } from '../types'
+import type { Family } from './policy'
 import {
 	FAMILIES,
 	PICK_LABELS,
@@ -29,7 +30,7 @@ const enabledAtom = atom({ plugin: 'model-policy', key: 'enabled' } as const, tr
 const usageAtom = atom({ plugin: 'model-policy', key: 'usage' } as const, {} as ModelPolicyUsage)
 const agentsAtom = atom({ plugin: 'model-policy', key: 'agents' } as const, {} as Record<string, string>)
 const daysAtom = atom({ plugin: 'model-policy', key: 'days' } as const, {} as Record<string, ModelPolicyDay>)
-const pickedAtom = atom({ plugin: 'model-policy', key: 'picked' } as const, null as ModelPolicyPick | null)
+const askedAtom = atom({ plugin: 'model-policy', key: 'asked' } as const, false)
 
 // What the last flush wrote, so an idle timer tick writes nothing.
 let lastFlushed = ''
@@ -99,19 +100,40 @@ async function week($: EngineInterface): Promise<string> {
 	return formatWeek(today, days)
 }
 
-// Asks which main model to use and switches to it. Closing the question, a -p run, and any failure
-// leave the model as it is. It never throws, so nothing waits on it and nothing breaks if it fails.
+// The family of the main session's model, or undefined when it cannot be read.
+async function mainFamily($: EngineInterface): Promise<Family | undefined> {
+	try {
+		return family(await $.session.model())
+	} catch {
+		return undefined
+	}
+}
+
+// Asks which main model to use and switches to it. Closing the question and a -p run leave the model
+// as it is. Nothing waits on this, so it never throws.
 async function askModel($: EngineInterface): Promise<void> {
 	try {
+		if (!(await read($, enabledAtom))) return
 		// A session that already has prompts was resumed, so it keeps its own model.
 		if ((await $.session.turns()) > 0) return
+		// The flag is set before the dialog opens, so a reload that runs session.start again asks nothing.
+		let first = false
+		await update($, askedAtom, was => {
+			first = !was
+			return true
+		})
+		if (!first) return
 		const answer = await $.ui.ask('Which model should this session use?', { options: PICK_LABELS, header: 'Model' })
 		const pick = pickFromAnswer(answer)
 		if (pick === undefined) return
-		await $.command.run({ command: 'model', args: pick })
-		await update($, pickedAtom, () => pick)
+		// A variant of the picked model, such as opus[1m], stays as configured.
+		if (family(await $.session.model()) === pick) return
+		const ran = await $.command.run({ command: 'model', args: pick })
+		if (family(await $.session.model()) !== pick) {
+			$.ui.log(`Model policy: could not switch to ${pick}. ${ran.text ?? ''}`.trim())
+		}
 	} catch {
-		// Dismissed, no one to ask, or the switch failed: keep the current model.
+		// Dismissed, or no one to ask: keep the current model.
 	}
 }
 
@@ -141,7 +163,7 @@ export const register: Register = (on, options) => {
 			// The first turn writes `usage` again.
 		}
 		// The dialog waits on the person, so it is not awaited: the session starts without it.
-		if (askAtStart) void askModel($)
+		if (askAtStart && e.isInteractive) void askModel($)
 		return next(e)
 	})
 
@@ -169,8 +191,6 @@ export const register: Register = (on, options) => {
 				})
 				await update($, usageAtom, () => ({}))
 				await update($, agentsAtom, () => ({}))
-				// A clear keeps the model, so it keeps the pick. A resumed session brings its own model.
-				if (e.reason === 'resume') await update($, pickedAtom, () => null)
 				lastFlushed = ''
 			} catch {
 				// Fall through to the write: the old tally still belongs to the ending session.
@@ -198,8 +218,7 @@ export const register: Register = (on, options) => {
 	on('agent.spawn', async ($, e, next) => {
 		// A resume can only be refused and a rewrite is logged as a failure, so it passes untouched.
 		if (e.resume !== undefined || !(await read($, enabledAtom))) return next(e)
-		const mainPick = (await read($, pickedAtom)) ?? undefined
-		const decision = decideSpawn(e, { mechanicModel, mainPick })
+		const decision = decideSpawn(e, { mechanicModel, mainFamily: await mainFamily($) })
 		if ('deny' in decision) return { deny: decision.deny }
 		const ran = 'model' in decision ? await next({ ...e, model: decision.model }) : await next(e)
 		if ('deny' in ran) return ran

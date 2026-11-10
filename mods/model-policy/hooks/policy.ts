@@ -32,8 +32,8 @@ export type SpawnInput = {
 export type SpawnContext = {
 	/** Model for model-policy:mechanic: "haiku" or "sonnet". */
 	mechanicModel: string
-	/** The main model the person picked at session start. Unset when nothing was picked. */
-	mainPick?: ModelPolicyPick
+	/** The family of the main session's model right now. Unset when it could not be read. */
+	mainFamily?: Family
 }
 
 export const DEFAULT_CONTEXT: SpawnContext = { mechanicModel: 'haiku' }
@@ -69,13 +69,13 @@ export function decideSpawn(spawn: SpawnInput, ctx: SpawnContext = DEFAULT_CONTE
 	if (spawn.fork) {
 		return {
 			deny:
-				'Model policy: forks run on the main session model (Opus), and only the main session runs on Opus. ' +
+				'Model policy: a fork inherits the main session model, which may be Opus, and only the main session runs on Opus. ' +
 				'Spawn a model-policy:coder, scout, mechanic, or reviewer agent with a self-contained prompt instead.',
 		}
 	}
 	if (family(spawn.model) === 'haiku') return { model: spawn.model ?? 'haiku' }
 	// A main session on Haiku means the person wants the cheapest run, so no agent goes above it.
-	if (ctx.mainPick === 'haiku') return { model: 'haiku' }
+	if (ctx.mainFamily === 'haiku') return { model: 'haiku' }
 	const type = spawn.subagentType ?? ''
 	const cheap = HAIKU_TYPES.has(type) || type === 'model-policy:mechanic'
 	if (cheap && family(spawn.model) === 'sonnet') return { model: spawn.model ?? 'sonnet' }

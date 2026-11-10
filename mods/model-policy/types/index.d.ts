@@ -7,7 +7,7 @@ export type ModelPolicyDay = {
 
 export type ModelPolicyUsage = Record<string, { tokens: number; cache: number }>
 
-/** The main model the person picked at session start. Also the alias /model takes. */
+/** A model the start-of-session question offers. Also the alias /model takes. */
 export type ModelPolicyPick = 'opus' | 'sonnet' | 'haiku'
 
 declare module 'claude-code' {
@@ -21,8 +21,8 @@ declare module 'claude-code' {
 			agents: Record<string, string>
 			/** This session's tally by local date, flushed to $.store as day-<date>-<sessionId>. */
 			days: Record<string, ModelPolicyDay>
-			/** The model picked at session start. Null when nothing was picked: the question was closed, off, or not asked. */
-			picked: ModelPolicyPick | null
+			/** True once the start-of-session model question was shown, so a reload or a second start never asks again. */
+			asked: boolean
 		}
 	}
 }

@@ -897,10 +897,18 @@ test('session.end: a flush during the reset window is skipped', async ($, on) =>
 	expect([...world.kv.keys()].sort()).toEqual([`day-${dayKey(NOON)}-s1`, `day-${dayKey(NOON)}-s2`])
 })
 
-// The engine's own answers for the start-of-session question and the /model switch.
+// The engine's own answers for the start-of-session question, the /model switch, and the model read.
 // Call it before engineTools: the first hook registered answers first.
 function enginePicker(on: On, answer: string | Error) {
-	const world = { asked: [] as Array<{ questions: Array<{ question: string; header: string; options: Array<{ label: string }> }> }>, ran: [] as Array<{ command: string; args: string }>, turns: 0 }
+	const world = {
+		asked: [] as Array<{ questions: Array<{ question: string; header: string; options: Array<{ label: string }> }> }>,
+		ran: [] as Array<{ command: string; args: string }>,
+		logs: [] as string[],
+		turns: 0,
+		// The main session's model. /model changes it when `switchWorks` is true.
+		model: 'claude-opus-4-7',
+		switchWorks: true,
+	}
 	on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
 		world.asked.push(e as never)
 		if (answer instanceof Error) throw answer
@@ -909,9 +917,16 @@ function enginePicker(on: On, answer: string | Error) {
 	})
 	on('command.run', { command: 'model' }, (_, e) => {
 		world.ran.push({ command: e.command, args: e.args })
+		if (!world.switchWorks) return { text: 'Unable to validate model' }
+		world.model = `claude-${e.args}-5-5`
 		return { text: '' }
 	})
 	on('session.turns', () => ({ value: world.turns }))
+	on('session.model', () => ({ value: world.model }))
+	on('ui.log', (_, e) => {
+		world.logs.push(e.text)
+		return { value: undefined }
+	})
 	return world
 }
 
@@ -919,6 +934,8 @@ function enginePicker(on: On, answer: string | Error) {
 const settle = () => new Promise<void>(resolve => setTimeout(resolve, 20))
 
 const START = { cwd: '/work/app', surface: 'terminal', isInteractive: true } as const
+
+const CODER = { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' }
 
 test('picker: the labels map to the /model aliases, and only a label is a pick', () => {
 	expect(PICK_LABELS).toEqual(['Opus', 'Sonnet', 'Haiku'])
@@ -930,26 +947,33 @@ test('picker: the labels map to the /model aliases, and only a label is a pick',
 	expect(pickFromAnswer('')).toBeUndefined()
 })
 
-test('picker: a Haiku main pick puts every agent on Haiku, other picks change nothing', () => {
+test('picker: a Haiku main model puts every agent on Haiku, other models change nothing', () => {
 	const coder = { subagentType: 'model-policy:coder' }
 	const reviewer = { subagentType: 'model-policy:reviewer', model: 'sonnet' }
 	for (const spawn of [coder, reviewer, { description: 'Write it' }, { model: 'opus' }, { subagentType: 'model-policy:mechanic', model: 'sonnet' }, { subagentType: 'Explore' }]) {
-		expect(decideSpawn(spawn, { mechanicModel: 'sonnet', mainPick: 'haiku' })).toEqual({ model: 'haiku' })
-		for (const mainPick of ['sonnet', 'opus', undefined] as const) {
-			expect(decideSpawn(spawn, { mechanicModel: 'sonnet', mainPick })).toEqual(decideSpawn(spawn, { mechanicModel: 'sonnet' }))
+		expect(decideSpawn(spawn, { mechanicModel: 'sonnet', mainFamily: 'haiku' })).toEqual({ model: 'haiku' })
+		for (const mainFamily of ['sonnet', 'opus', 'other', undefined] as const) {
+			expect(decideSpawn(spawn, { mechanicModel: 'sonnet', mainFamily })).toEqual(decideSpawn(spawn, { mechanicModel: 'sonnet' }))
 		}
 	}
-	// Opus is never an agent model, whatever was picked.
-	for (const mainPick of ['opus', 'sonnet', 'haiku'] as const) {
-		expect(decideSpawn({ model: 'opus' }, { mechanicModel: 'haiku', mainPick })).not.toEqual({ model: 'opus' })
+	// Opus is never an agent model, whatever the main model is.
+	for (const mainFamily of ['opus', 'sonnet', 'haiku'] as const) {
+		expect(decideSpawn({ model: 'opus' }, { mechanicModel: 'haiku', mainFamily })).not.toEqual({ model: 'opus' })
 	}
 	// An explicit Haiku id is kept as given, a fork is still denied, and a resume still passes.
-	expect(decideSpawn({ model: 'claude-haiku-4-5' }, { mechanicModel: 'haiku', mainPick: 'haiku' })).toEqual({ model: 'claude-haiku-4-5' })
-	expect(decideSpawn({ fork: true }, { mechanicModel: 'haiku', mainPick: 'haiku' })).toHaveProperty('deny')
-	expect(decideSpawn({ resume: { agentId: 'a1' } }, { mechanicModel: 'haiku', mainPick: 'haiku' })).toEqual({ allow: true })
+	expect(decideSpawn({ model: 'claude-haiku-4-5' }, { mechanicModel: 'haiku', mainFamily: 'haiku' })).toEqual({ model: 'claude-haiku-4-5' })
+	expect(decideSpawn({ fork: true }, { mechanicModel: 'haiku', mainFamily: 'haiku' })).toHaveProperty('deny')
+	expect(decideSpawn({ resume: { agentId: 'a1' } }, { mechanicModel: 'haiku', mainFamily: 'haiku' })).toEqual({ allow: true })
 })
 
-test('picker: a new session asks once, and each pick runs /model with its alias', async ($, on) => {
+test('picker: the fork denial does not say the main model is Opus', () => {
+	const { deny } = decideSpawn({ fork: true }, { mechanicModel: 'haiku', mainFamily: 'haiku' }) as { deny: string }
+	expect(deny).toMatch(/inherits the main session model, which may be Opus/)
+	expect(deny).not.toMatch(/\(Opus\)/)
+	expect(deny).toMatch(/coder, scout, mechanic, or reviewer/)
+})
+
+test('picker: a new session asks once, and the pick runs /model with its alias', async ($, on) => {
 	const world = enginePicker(on, 'Sonnet')
 	engineTools(on)
 	await $.session.start(START)
@@ -959,17 +983,28 @@ test('picker: a new session asks once, and each pick runs /model with its alias'
 	expect(question?.options.map(o => o.label)).toEqual(['Opus', 'Sonnet', 'Haiku'])
 	expect(question?.header).toBe('Model')
 	expect(world.ran).toEqual([{ command: 'model', args: 'sonnet' }])
+	expect(world.logs).toEqual([])
 })
 
-for (const [label, alias] of [['Opus', 'opus'], ['Haiku', 'haiku']] as const) {
-	test(`picker: ${label} runs /model ${alias}`, async ($, on) => {
-		const world = enginePicker(on, label)
-		engineTools(on)
-		await $.session.start(START)
-		await settle()
-		expect(world.ran).toEqual([{ command: 'model', args: alias }])
-	})
-}
+test('picker: Opus is picked while the model is Sonnet, so /model opus runs', async ($, on) => {
+	const world = enginePicker(on, 'Opus')
+	world.model = 'claude-sonnet-5-5'
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.ran).toEqual([{ command: 'model', args: 'opus' }])
+})
+
+test('picker: a pick in the family of the current model runs no /model', async ($, on) => {
+	const world = enginePicker(on, 'Opus')
+	world.model = 'claude-opus-4-7[1m]'
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toHaveLength(1)
+	expect(world.ran).toEqual([])
+	expect(world.model).toBe('claude-opus-4-7[1m]')
+})
 
 test('picker: session.start does not wait for the answer', async ($, on) => {
 	let release = () => {}
@@ -986,6 +1021,26 @@ test('picker: session.start does not wait for the answer', async ($, on) => {
 	release()
 	await settle()
 	expect(world.ran).toEqual([{ command: 'model', args: 'haiku' }])
+})
+
+test('picker: a second session.start in the same session asks nothing, even while the first dialog is open', async ($, on) => {
+	let release = () => {}
+	const gate = new Promise<void>(resolve => (release = resolve))
+	on('tool.call', { tool: 'AskUserQuestion' }, async (_, e, next) => {
+		await gate
+		return next(e)
+	})
+	const world = enginePicker(on, 'Haiku')
+	engineTools(on)
+	await $.session.start(START)
+	await $.session.start(START)
+	await settle()
+	release()
+	await settle()
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toHaveLength(1)
+	expect(world.ran).toHaveLength(1)
 })
 
 test('picker: a session that already has prompts, /clear, and a resume do not ask', async ($, on) => {
@@ -1011,16 +1066,25 @@ test('picker: closing the question leaves the model and the agents alone', async
 	await settle()
 	expect(world.asked).toHaveLength(1)
 	expect(world.ran).toEqual([])
-	const run = await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })
-	expect(run.model).toBe('sonnet')
+	expect((await spawn($, CODER)).model).toBe('sonnet')
 })
 
-test('picker: a -p run never asks and never fails', async ($, on) => {
+test('picker: a -p run does not ask and does not fail', async ($, on) => {
 	const world = enginePicker(on, new Error('no one to ask'))
 	engineTools(on)
 	await $.session.start({ cwd: '/work/app', surface: null, isInteractive: false })
 	await settle()
+	expect(world.asked).toEqual([])
 	expect(world.ran).toEqual([])
+})
+
+test('picker: a rejection with no one to ask is swallowed', async ($, on) => {
+	const world = enginePicker(on, new Error('no one to ask'))
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toHaveLength(1)
+	expect(world.logs).toEqual([])
 })
 
 test('picker: free text typed under Other is no pick', async ($, on) => {
@@ -1040,20 +1104,55 @@ test('picker: askModelAtStart off asks nothing', { options: { askModelAtStart: f
 	expect(world.ran).toEqual([])
 })
 
-test('picker: a Haiku pick caps a coder and a reviewer spawn, and /clear keeps it', async ($, on) => {
-	enginePicker(on, 'Haiku')
-	const seen = engineSpawn(on)
+test('picker: /model-policy off asks nothing', async ($, on) => {
+	const world = enginePicker(on, 'Haiku')
+	engineTools(on)
+	await slash($, 'off')
+	await $.session.start(START)
+	await settle()
+	expect(world.asked).toEqual([])
+	expect(world.ran).toEqual([])
+})
+
+test('picker: a failed switch shows the command text and caps nothing', async ($, on) => {
+	const world = enginePicker(on, 'Haiku')
+	world.switchWorks = false
+	engineSpawn(on)
 	engineTools(on)
 	await $.session.start(START)
 	await settle()
-	expect((await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })).model).toBe('haiku')
-	expect((await spawn($, { prompt: 'p', description: 'Check', subagentType: 'model-policy:reviewer', model: 'sonnet' })).model).toBe('haiku')
+	expect(world.ran).toEqual([{ command: 'model', args: 'haiku' }])
+	expect(world.logs).toHaveLength(1)
+	expect(world.logs[0]).toMatch(/could not switch to haiku/)
+	expect(world.logs[0]).toMatch(/Unable to validate model/)
+	expect((await spawn($, CODER)).model).toBe('sonnet')
+})
+
+test('picker: the cap follows the live main model, not the pick', async ($, on) => {
+	const world = enginePicker(on, 'Haiku')
+	engineSpawn(on)
+	engineTools(on)
+	await $.session.start(START)
+	await settle()
+	expect(world.ran).toEqual([{ command: 'model', args: 'haiku' }])
+	expect((await spawn($, CODER)).model).toBe('haiku')
+	expect((await spawn($, { ...CODER, subagentType: 'model-policy:reviewer', model: 'sonnet' })).model).toBe('haiku')
+	// /clear keeps the model, so it keeps the cap.
 	await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
-	expect((await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })).model).toBe('haiku')
-	// A resumed session brings its own model, so the pick ends.
-	await $.session.end({ reason: 'resume', sessionId: 's1', resume: {} } as never)
-	expect((await spawn($, { prompt: 'p', description: 'Write', subagentType: 'model-policy:coder' })).model).toBe('sonnet')
-	expect(seen.map(s => s.model)).toEqual(['haiku', 'haiku', 'haiku', 'sonnet'])
+	expect((await spawn($, CODER)).model).toBe('haiku')
+	// A manual /model back to Sonnet lifts the cap.
+	world.model = 'claude-sonnet-5-5'
+	expect((await spawn($, CODER)).model).toBe('sonnet')
+})
+
+test('picker: a main model on Haiku caps agents with no pick made', { options: { askModelAtStart: false } }, async ($, on) => {
+	const world = enginePicker(on, 'Haiku')
+	world.model = 'claude-haiku-4-5'
+	engineSpawn(on)
+	engineTools(on)
+	await $.session.start(START)
+	expect((await spawn($, CODER)).model).toBe('haiku')
+	expect((await spawn($, { ...CODER, subagentType: 'model-policy:reviewer' })).model).toBe('haiku')
 })
 
 for (const label of ['Sonnet', 'Opus']) {
