@@ -55,7 +55,9 @@ export const relativize = (path: string, cwd: string | undefined): string => {
   if (base === '') return path
   if (path === base) return '.'
   const sep = path.charAt(base.length)
-  return path.startsWith(base) && (sep === '/' || sep === '\\') ? path.slice(base.length + 1) : path
+  if (!path.startsWith(base) || (sep !== '/' && sep !== '\\')) return path
+  // `/a/b/` inside `/a/b` is the folder itself.
+  return path.slice(base.length + 1) || '.'
 }
 
 export const touchedIn = (t: Touched, cwd: string | undefined): Touched => ({
@@ -351,18 +353,18 @@ export const resetText = (kind: string, resetsAt: number | undefined, now: numbe
 /** The least percent used before a limit gets a projection row. */
 export const PROJECT_MIN_PERCENT = 5
 
-export type Projection = { text: string; color: string | undefined }
+/** `short` is the form for a narrow row. A `color` of undefined means dim. */
+export type Projection = { text: string; short: string; color: string | undefined }
 
 /**
  * Where a limit is heading at the pace so far. Undefined when there is nothing
  * to say: under PROJECT_MIN_PERCENT, an unknown reset, or no time elapsed.
- * A `color` of undefined means dim.
  */
 export const projectLimit = (
   l: { kind: string; percent: number; resetsAt?: number },
   now: number,
 ): Projection | undefined => {
-  if (l.percent >= 100) return { text: 'limit reached', color: CRIT_RED }
+  if (l.percent >= 100) return { text: 'limit reached', short: 'limit reached', color: CRIT_RED }
   const window = WINDOW_MS[l.kind]
   if (window === undefined || l.resetsAt === undefined || l.percent < PROJECT_MIN_PERCENT) {
     return undefined
@@ -370,14 +372,14 @@ export const projectLimit = (
   const elapsed = window - (l.resetsAt - now)
   if (elapsed <= 0) return undefined
   const hitAt = now + ((100 - l.percent) / l.percent) * elapsed
-  if (hitAt >= l.resetsAt) return { text: 'on pace, resets first', color: undefined }
+  if (hitAt >= l.resetsAt) return { text: 'on pace, resets first', short: 'on pace', color: undefined }
   const when =
     l.kind === 'five_hour' && sameDay(hitAt, now) ? formatClock(hitAt) : formatWeekdayTime(hitAt)
   // A 5 hour window always fills within 5 hours, so "soon" only means something for the longer one.
   const soon = window > 5 * HOUR_MS && hitAt - now < 5 * HOUR_MS
   const long = window <= 5 * HOUR_MS || l.resetsAt - hitAt > 24 * HOUR_MS
   const color = soon ? CRIT_RED : long ? WARN_AMBER : CLAUDE_ORANGE
-  return { text: `at this pace, full ${when}`, color }
+  return { text: `at this pace, full ${when}`, short: `full ${when}`, color }
 }
 
 const trimZero = (n: number): string => n.toFixed(1).replace(/\.0$/, '')
@@ -431,15 +433,49 @@ const SEP = ' \u00b7 '
  */
 export const agentMeta = (r: AgentRow, now: number, cols: number): [string, string] => {
   const width = Math.max(0, cols - META_INDENT)
-  const rest = [familyName(r.model), formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt))]
-  const type = truncate(typeName(r.type), Math.max(1, width - [''].concat(rest).join(SEP).length))
-  const stats = [r.tools === 1 ? '1 tool' : `${r.tools} tools`, `${formatTokens(r.tokens)} tok`]
+  const duration = formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt))
+  // The duration stays whole. The model gives up room for a 1 character type, then the type takes the rest.
+  const fixed = 2 * SEP.length + duration.length
+  const model = truncate(familyName(r.model), Math.max(1, width - 1 - fixed))
+  const type = truncate(typeName(r.type), Math.max(1, width - model.length - fixed))
+  const tok = `${formatTokens(r.tokens)} tok`
+  const count = formatTokens(r.tools)
+  // From the plain form to the shortest: large counts compact, then `tools` becomes `tl`, then `tok` goes.
+  const stats = [
+    [r.tools === 1 ? '1 tool' : `${r.tools} tools`, tok],
+    [`${count} tools`, tok],
+    [`${count} tl`, tok],
+    [`${count} tl`, formatTokens(r.tokens)],
+  ].map(parts => parts.join(SEP))
+  const fitted = stats.find(s => s.length <= width) ?? stats[stats.length - 1] ?? ''
   const tool = r.status === 'running' && r.lastTool ? toolName(r.lastTool) : undefined
-  const room = width - stats.join(SEP).length - SEP.length
+  const room = width - fitted.length - SEP.length
   return [
-    [type, ...rest].join(SEP),
-    (tool !== undefined && room > 0 ? [...stats, truncate(tool, room)] : stats).join(SEP),
+    [type, model, duration].join(SEP),
+    tool !== undefined && room > 0 ? `${fitted}${SEP}${truncate(tool, room)}` : fitted,
   ]
+}
+
+export const BAR_MAX = 10
+export const BAR_MIN = 4
+/** Columns of ` 41%` after a bar. */
+export const PERCENT_COLS = 5
+
+/**
+ * The bar width and the text after the percent for a row `cols` wide. `tails` run from the
+ * long form to the short one. The first form that leaves a bar of BAR_MIN cells wins, and the
+ * bar takes up to BAR_MAX of what is left. When none does, the first form that fits with no bar.
+ */
+export const barLayout = (
+  cols: number,
+  leadLength: number,
+  tails: readonly string[],
+): { barWidth: number; tail: string } => {
+  const room = (tail: string): number => cols - leadLength - PERCENT_COLS - tail.length
+  const withBar = tails.find(t => room(t) >= BAR_MIN)
+  if (withBar !== undefined) return { barWidth: Math.min(BAR_MAX, room(withBar)), tail: withBar }
+  const bare = tails.find(t => room(t) >= 0) ?? tails[tails.length - 1] ?? ''
+  return { barWidth: 0, tail: bare }
 }
 
 export type Bar = { filled: string; empty: string }
@@ -702,7 +738,14 @@ export const editSummary = (a: Activity, width: number): string | undefined => {
     const tail = ` (${files})`
     return `${lead}${truncateLeft(only.folder, width - lead.length - tail.length)}${tail}`
   }
-  return `edits ${groups.length} folders (${files})`
+  const n = groups.length
+  // The long form, then shorter ones, each tried against the room.
+  const forms = [
+    `edits ${n} folders (${files})`,
+    `${n} folders, ${files}`,
+    `${n} dirs, ${files}`,
+  ]
+  return forms.find(f => f.length <= width) ?? truncate(forms[forms.length - 1] ?? '', width)
 }
 
 /** The rows under an expanded row: edited files, read folders and recent tools. Indent 4. */

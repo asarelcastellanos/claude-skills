@@ -7,6 +7,7 @@ import {
   AGENT_ROWS,
   agentMeta,
   bar,
+  barLayout,
   CLAUDE_ORANGE,
   completed,
   CRAB,
@@ -305,6 +306,12 @@ export const register: Register = on => {
       try {
         await update($, agents, () => [])
       } catch {}
+      try {
+        await update($, main, () => emptyActivity())
+      } catch {}
+      try {
+        await update($, opened, () => [])
+      } catch {}
       refreshLater($)
     }
 
@@ -312,8 +319,9 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
-    // Bookkeeping must never block or change the tool call.
-    try {
+    // Bookkeeping never delays or changes the tool call: it starts first, the call runs,
+    // and the result waits only for the bookkeeping to finish within this dispatch.
+    const bookkeeping = (async () => {
       const now = await $.clock.now()
       const cwd = (await read($, env))?.cwd ?? (await $.session.cwd().catch(() => undefined))
       const touched = touchedIn(toolPaths(e), cwd)
@@ -323,9 +331,11 @@ export const register: Register = on => {
       } else {
         await update($, main, activity => withTool(activity, e.tool, touched))
       }
-    } catch {}
+    })().catch(() => {})
+    const ran = await next(e)
+    await bookkeeping
 
-    return next(e)
+    return ran
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -363,7 +373,6 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const cols = Math.max(MIN_COLS, e.props.bodyColumns)
     const height = e.props.scroll.bodyRows || e.viewport?.rows || 40
-    const barWidth = cols >= 34 ? 10 : 6
 
     const limits = snap?.limits ?? []
     const policyRows = policy === undefined ? [] : policyLines(policy.enabled, policy.usage)
@@ -412,12 +421,14 @@ export const register: Register = on => {
         </Text>
       )
     }
-    const barRow = (lead: string, percent: number, tail: string) => {
+    // `tails` run from the long form to the short one: the layout picks what fits beside the bar.
+    const barRow = (lead: string, percent: number, tails: string[]) => {
       const color = severityColor(severity(percent))
-      const b = bar(percent, barWidth)
+      const layout = barLayout(cols, lead.length, tails)
+      const b = bar(percent, layout.barWidth)
       const after = truncate(
-        ` ${String(Math.round(percent)).padStart(3)}%${tail}`,
-        Math.max(0, cols - lead.length - barWidth),
+        ` ${String(Math.round(percent)).padStart(3)}%${layout.tail}`,
+        Math.max(0, cols - lead.length - layout.barWidth),
       )
       return (
         <Text>
@@ -482,7 +493,10 @@ export const register: Register = on => {
           : barRow(
               '  ',
               snap.contextPercent,
-              `   ${formatTokens(snap.contextTokens ?? 0)} / ${formatTokens(snap.contextWindow)}`,
+              [
+                `   ${formatTokens(snap.contextTokens ?? 0)} / ${formatTokens(snap.contextWindow)}`,
+                `  ${formatTokens(snap.contextTokens ?? 0)}/${formatTokens(snap.contextWindow)}`,
+              ],
             )}
         {blank()}
         {section('Usage')}
@@ -493,9 +507,15 @@ export const register: Register = on => {
           const projection = projections[i]
           return (
             <Box flexDirection="column">
-              {barRow(lead, l.percent, reset === '' ? '' : `  resets ${reset}`)}
+              {barRow(lead, l.percent, reset === '' ? [''] : [`  resets ${reset}`, `  ${reset}`])}
               {projection !== undefined &&
-                line(`${' '.repeat(lead.length)}${projection.text}`, projection.color, projection.color === undefined)}
+                line(
+                  `${' '.repeat(lead.length)}${
+                    lead.length + projection.text.length <= cols ? projection.text : projection.short
+                  }`,
+                  projection.color,
+                  projection.color === undefined,
+                )}
             </Box>
           )
         })}
@@ -528,8 +548,9 @@ export const register: Register = on => {
             </Box>
           )
         })}
-        {rows.length === 0 && line('  none yet', undefined, true)}
-        {hidden > 0 && line(`  +${hidden} more`, undefined, true)}
+        {hidden > 0
+          ? line(`  +${hidden} more`, undefined, true)
+          : rows.length === 0 && line('  none yet', undefined, true)}
       </Box>
     )
   })

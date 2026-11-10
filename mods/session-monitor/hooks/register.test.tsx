@@ -1,6 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
+import { formatWeekdayTime } from './model'
+
 const PANE = {
   plugin: 'session-monitor',
   component: 'Pane',
@@ -194,6 +196,7 @@ function engine(
     policy?: { enabled?: boolean; usage: Record<string, unknown> }
     limits?: { kind: string; percentUsed: number; resetsAt?: string }[]
     worktree?: boolean
+    onTool?: () => void
   } = {},
 ) {
   const opens: Open[] = []
@@ -208,7 +211,11 @@ function engine(
     return { value: undefined }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('tool.call', () => ({ result: {} }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('tool.call', () => {
+    opts.onTool?.()
+    return { result: {} }
+  })
   on('turn.complete', () => ({ text: '' }))
   on('session.usage', () => ({
     value: {
@@ -553,4 +560,98 @@ test('a folder that is not a worktree shows no worktree row', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /^ {2}\/work\/claude-skills$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /worktree/ })).toBeUndefined()
   await ui.unmount()
+})
+
+// The test environment has real timers, but the API's type root names no DOM or Node.
+declare const setTimeout: (fn: (...args: never[]) => void, ms: number) => unknown
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+test('/clear empties the Main session row and collapses every row', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Edit', file_path: EDIT } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const first = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  await first.press({ key: 'row:main' })
+  await first.press({ key: 'header' })
+  expect(await first.find({ type: 'Text', text: /^ {4}Edited$/ })).toBeDefined()
+  expect(await first.find({ type: 'Text', text: /^ {2}\/work\/claude-skills$/ })).toBeDefined()
+  await first.unmount()
+
+  await $.session.end({ reason: 'clear', sessionId: 's' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /^ {4}0 tools$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Edited/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}\/work\/claude-skills$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^ \u25b8$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the tool call runs before its bookkeeping write lands', async ($, on) => {
+  let toolRan = false
+  let ranBeforeWrite: boolean | undefined
+  engine(on, {
+    onTool: () => {
+      toolRan = true
+    },
+  })
+  // Hold the monitor's write until the tool has run, or give up after a short wait.
+  on('state.set', { plugin: 'session-monitor', key: 'main' }, async () => {
+    for (let i = 0; i < 100 && !toolRan; i++) await new Promise(r => setTimeout(r, 1))
+    ranBeforeWrite = toolRan
+    return { value: { isSet: true, version: 1 } }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Edit', file_path: EDIT } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  expect(ranBeforeWrite).toBe(true)
+})
+
+test('with no agents and no room for the Main row, only "+1 more" draws', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const tight = await $.ui.mount({
+    ...PANE,
+    surface: 'terminal',
+    props: { ...PANE.props, bodyColumns: 40, scroll: { offset: 0, bodyRows: 16 } },
+  })
+  expect(await tight.find({ type: 'Text', text: /\+1 more/ })).toBeDefined()
+  expect(await tight.find({ type: 'Text', text: /none yet/ })).toBeUndefined()
+  await tight.unmount()
+
+  const roomy = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await roomy.find({ type: 'Text', text: /none yet/ })).toBeDefined()
+  expect(await roomy.find({ type: 'Text', text: /\+1 more/ })).toBeUndefined()
+  await roomy.unmount()
+})
+
+test('from 23 columns up the usage times are whole and no row is wider than the pane', async ($, on) => {
+  const H = 3_600_000
+  const NOW = 60_000
+  const reset = NOW + 3 * 24 * H
+  const full = NOW + 64 * H
+  engine(on, {
+    limits: [
+      { kind: 'five_hour', percentUsed: 60, resetsAt: new Date(NOW + 3 * H).toISOString() },
+      { kind: 'seven_day', percentUsed: 60, resetsAt: new Date(reset).toISOString() },
+    ],
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  for (const cols of [23, 30, 34, 36, 40]) {
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: cols } })
+    expect(await ui.find({ type: 'Text', text: new RegExp(`7d .*60%.* ${escape(formatWeekdayTime(reset))}$`) })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: new RegExp(`^ {6}(at this pace, )?full ${escape(formatWeekdayTime(full))}$`) })).toBeDefined()
+    for (const text of await ui.findAll({ type: 'Text' })) {
+      expect((text.text ?? '').length).toBeLessThanOrEqual(cols)
+    }
+    await ui.unmount()
+  }
 })

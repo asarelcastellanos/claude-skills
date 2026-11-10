@@ -4,11 +4,14 @@ import type { AgentRow } from '../types'
 import {
   AGENT_ROWS,
   agentMeta,
+  barLayout,
   bar,
   CLAUDE_ORANGE,
   completed,
   CRAB,
   CRAB_MIN_COLS,
+  BAR_MAX,
+  BAR_MIN,
   CRIT_RED,
   denied,
   emptyActivity,
@@ -553,19 +556,23 @@ describe('limit projection', () => {
   })
 
   test('at 100 percent the limit is reached, even with no reset time', async () => {
-    expect(projectLimit({ kind: 'seven_day', percent: 100 }, NOW)).toEqual({ text: 'limit reached', color: CRIT_RED })
+    expect(projectLimit({ kind: 'seven_day', percent: 100 }, NOW)).toEqual({ text: 'limit reached', short: 'limit reached', color: CRIT_RED })
     expect(projectLimit(five(1, 104), NOW)?.text).toBe('limit reached')
   })
 
   test('on pace when the reset comes first', async () => {
     // Half the week gone, 40 percent used: full after 5.25 days, reset in 3.5.
-    expect(projectLimit(seven(84, 40), NOW)).toEqual({ text: 'on pace, resets first', color: undefined })
+    expect(projectLimit(seven(84, 40), NOW)).toEqual({ text: 'on pace, resets first', short: 'on pace', color: undefined })
   })
 
   test('7 day window: amber when the limit stays full for over a day', async () => {
     // 3 days gone, 60 percent: full in 2 days, reset in 4.
     const p = projectLimit(seven(72, 60), NOW)
-    expect(p).toEqual({ text: `at this pace, full ${formatWeekdayTime(NOW + 48 * H)}`, color: WARN_AMBER })
+    expect(p).toEqual({
+      text: `at this pace, full ${formatWeekdayTime(NOW + 48 * H)}`,
+      short: `full ${formatWeekdayTime(NOW + 48 * H)}`,
+      color: WARN_AMBER,
+    })
   })
 
   test('7 day window: orange when the limit is full for under a day', async () => {
@@ -582,7 +589,7 @@ describe('limit projection', () => {
 
   test('5 hour window: amber, time only on the same day', async () => {
     // 2 hours gone, 80 percent: full in 30 minutes.
-    expect(projectLimit(five(2, 80), NOW)).toEqual({ text: 'at this pace, full 12:30', color: WARN_AMBER })
+    expect(projectLimit(five(2, 80), NOW)).toEqual({ text: 'at this pace, full 12:30', short: 'full 12:30', color: WARN_AMBER })
     const late = new Date(2026, 10, 9, 23, 50).getTime()
     const next = projectLimit(
       { kind: 'five_hour', percent: 80, resetsAt: late + WINDOW_MS.five_hour! - 2 * H },
@@ -825,5 +832,105 @@ describe('tool path tracking', () => {
 
   test('fixedRows adds the rows opened under the header', async () => {
     expect(fixedRows(2, 0, 2)).toBe(fixedRows(2, 0) + 2)
+  })
+})
+
+describe('narrow widths', () => {
+  const H = 3_600_000
+  const base: AgentRow = {
+    ...emptyActivity(),
+    key: 'k',
+    description: 'd',
+    type: 'coder',
+    model: 'claude-sonnet-5-5',
+    status: 'running',
+    startedAt: 0,
+    tools: 12,
+    tokens: 18_000,
+    lastTool: 'Edit',
+  }
+  const rowsAt = (over: Partial<AgentRow>, cols = 23): [string, string] => {
+    const [one, two] = agentMeta({ ...base, ...over }, 64_000, cols)
+    const indent = ' '.repeat(META_INDENT)
+    return [`${indent}${one}`, `${indent}${two}`]
+  }
+
+  test('relativize turns the folder itself into a dot', async () => {
+    expect(relativize('/a/b/', '/a/b')).toBe('.')
+    expect(relativize('/a/b/', '/a/b/')).toBe('.')
+    expect(relativize('C:\\work\\repo\\', 'C:\\work\\repo')).toBe('.')
+    expect(relativize('/a/b/c/', '/a/b')).toBe('c/')
+    const t = touchedIn({ edits: [], reads: [], searched: ['/a/b/'] }, '/a/b')
+    expect(t.searched).toEqual(['.'])
+    expect(withTool(emptyActivity(), 'Grep', t).reads).toEqual([['./', 1]])
+    expect(groupByFolder([['./', 1]])).toEqual([{ folder: '.', files: [['', 1]] }])
+  })
+
+  test('an unknown model name shortens to fit and the duration stays whole at 23 columns', async () => {
+    const [one] = rowsAt({ model: 'some-unknown-model-name' })
+    expect(one.length).toBeLessThanOrEqual(23)
+    expect(one.endsWith(' \u00b7 1m 04s')).toBe(true)
+    const [long] = rowsAt({ model: 'abcdefghij' }, 23)
+    expect(long.length).toBeLessThanOrEqual(23)
+    expect(long.endsWith('1m 04s')).toBe(true)
+    // With room the model shows whole.
+    expect(agentMeta({ ...base, model: 'abcdefghij' }, 64_000, 40)[0]).toBe('coder \u00b7 Abcdefghij \u00b7 1m 04s')
+  })
+
+  test('huge counts use a compact form and the token count stays whole at 23 columns', async () => {
+    const [, a] = rowsAt({ tools: 1000, tokens: 1_500_000 })
+    expect(a).toBe('    1k tools \u00b7 1.5M tok')
+    const [, b] = rowsAt({ tools: 12_345, tokens: 12_300_000 })
+    expect(b).toContain('12.3M')
+    for (const text of [a, b]) expect(text.length).toBeLessThanOrEqual(23)
+    const [, c] = rowsAt({ tools: 12_345, tokens: 12_300_000 }, 40)
+    expect(c).toBe('    12345 tools \u00b7 12.3M tok \u00b7 Edit')
+  })
+
+  test('the plain stats form stays when it fits', async () => {
+    expect(rowsAt({})[1]).toBe('    12 tools \u00b7 18k tok')
+    expect(rowsAt({ tools: 1 })[1]).toBe('    1 tool \u00b7 18k tok')
+  })
+
+  test('the multi-folder edit summary fits 23 columns', async () => {
+    const files: [string, number][] = Array.from({ length: 50 }, (_, i) => [`d${i % 10}/f${i}.ts`, 1])
+    const a = { ...emptyActivity(), tools: 9, edits: files }
+    expect(editSummary(a, 60)).toBe('edits 10 folders (50 files)')
+    const narrow = editSummary(a, 19)
+    expect(narrow).toBe('10 dirs, 50 files')
+    expect(narrow?.length).toBeLessThanOrEqual(19)
+    expect(editSummary(a, 20)).toBe('10 folders, 50 files')
+    for (const row of extraRows(a, 23, false)) expect(row.length).toBeLessThanOrEqual(23)
+  })
+
+  test('barLayout takes the long tail only when a bar of BAR_MIN fits beside it', async () => {
+    const tails = ['  resets Wed 10:00', '  Wed 10:00']
+    expect(barLayout(60, 6, tails)).toEqual({ barWidth: BAR_MAX, tail: tails[0] })
+    expect(barLayout(34, 6, tails)).toEqual({ barWidth: 5, tail: tails[0] })
+    expect(barLayout(30, 6, tails)).toEqual({ barWidth: 8, tail: tails[1] })
+    expect(barLayout(23, 6, tails)).toEqual({ barWidth: 0, tail: tails[1] })
+    expect(BAR_MIN).toBe(4)
+  })
+
+  test('at every width from 23 the reset time and the projection time are whole and fit', async () => {
+    const reset = new Date(2026, 10, 11, 10, 0).getTime()
+    const when = formatWeekdayTime(reset)
+    for (const cols of [23, 26, 30, 34, 36, 40, 60]) {
+      const tails = [`  resets ${when}`, `  ${when}`]
+      const layout = barLayout(cols, 6, tails)
+      const row = `  7d  ${'#'.repeat(layout.barWidth)}${' ' + '99'.padStart(3)}%${layout.tail}`
+      expect(row.length).toBeLessThanOrEqual(cols)
+      expect(row.endsWith(when)).toBe(true)
+    }
+  })
+
+  test('projection short forms drop the lead words', async () => {
+    const NOW = new Date(2026, 10, 9, 12, 0).getTime()
+    const p = projectLimit(
+      { kind: 'seven_day', percent: 60, resetsAt: NOW + 7 * 24 * H - 72 * H },
+      NOW,
+    )
+    expect(p?.short).toBe(`full ${formatWeekdayTime(NOW + 48 * H)}`)
+    expect(`      ${p?.short}`.length).toBeLessThanOrEqual(23)
   })
 })
