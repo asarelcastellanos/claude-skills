@@ -347,7 +347,7 @@ test('at 40 columns a running agent shows its tools, tokens and last tool whole'
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
   expect(await ui.find({ type: 'Text', text: /^ {4}coder \u00b7 Sonnet \u00b7 \d+s$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^ {4}1 tools \u00b7 0 tok \u00b7 Edit$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}1 tool \u00b7 0 tok \u00b7 Edit$/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -391,5 +391,18 @@ test('at 40 columns the Policy section lists three families on their own rows', 
   expect(await ui.find({ type: 'Text', text: /^ {2}opus {4}123k$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^ {2}sonnet {2}456k$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^ {2}haiku {3}78k$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('at 40 columns real long agent and tool names keep duration and tokens whole', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ ...(SPAWN as object), subagentType: 'model-policy:reviewer' } as never)
+  await $.tool.call({ tool: 'mcp__plugin-authoring__scan_secrets', agentId: 'a1' } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /^ {4}reviewer \u00b7 Sonnet \u00b7 \d+s$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}1 tool \u00b7 0 tok \u00b7 scan_secrets$/ })).toBeDefined()
   await ui.unmount()
 })

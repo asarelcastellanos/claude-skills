@@ -24,6 +24,7 @@ import {
   headerPlan,
   limitLabel,
   locationLine,
+  META_INDENT,
   parseGitStatus,
   policyLines,
   resolved,
@@ -446,7 +447,7 @@ export const register: Register = on => {
                 </Text>
                 {truncate(`${r.description}${tag}`, cols - 4)}
               </Text>
-              {agentMeta(r, now).map(text => line(`    ${text}`, undefined, true))}
+              {agentMeta(r, now, cols).map(text => line(`${' '.repeat(META_INDENT)}${text}`, undefined, true))}
             </Box>
           )
         })}

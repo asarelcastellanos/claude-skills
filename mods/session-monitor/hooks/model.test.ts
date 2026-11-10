@@ -22,6 +22,7 @@ import {
   formatReset,
   formatTokens,
   locationLine,
+  META_INDENT,
   order,
   parseGitStatus,
   policyLines,
@@ -37,7 +38,9 @@ import {
   symbol,
   toolCalled,
   trim,
+  toolName,
   truncate,
+  typeName,
   visible,
   WARN_AMBER,
 } from './model'
@@ -350,26 +353,73 @@ describe('pane layout', () => {
     expect(new Set(others).size).toBe(others.length)
   })
 
+  const meta = (over: Partial<AgentRow> = {}): AgentRow => ({
+    key: 'k',
+    description: 'd',
+    type: 'coder',
+    model: 'claude-sonnet-5-5',
+    status: 'running',
+    startedAt: 0,
+    tools: 12,
+    tokens: 18_000,
+    lastTool: 'Edit',
+    ...over,
+  })
+
   test('agentMeta splits into two rows that fit a 40 column dock', async () => {
-    const row: AgentRow = {
-      key: 'k',
-      description: 'd',
-      type: 'coder',
-      model: 'claude-sonnet-5-5',
-      status: 'running',
-      startedAt: 0,
-      tools: 12,
-      tokens: 18_000,
-      lastTool: 'Edit',
-    }
+    const row = meta()
     expect(AGENT_ROWS).toBe(3)
-    expect(agentMeta(row, 64_000)).toEqual(['coder \u00b7 Sonnet \u00b7 1m 04s', '12 tools \u00b7 18k tok \u00b7 Edit'])
-    expect(agentMeta({ ...row, status: 'done', endedAt: 18_000 }, 64_000)).toEqual([
+    expect(agentMeta(row, 64_000, 40)).toEqual(['coder \u00b7 Sonnet \u00b7 1m 04s', '12 tools \u00b7 18k tok \u00b7 Edit'])
+    expect(agentMeta(meta({ status: 'done', endedAt: 18_000 }), 64_000, 40)).toEqual([
       'coder \u00b7 Sonnet \u00b7 18s',
       '12 tools \u00b7 18k tok',
     ])
-    expect(agentMeta({ ...row, lastTool: undefined }, 64_000)[1]).toBe('12 tools \u00b7 18k tok')
-    for (const text of agentMeta(row, 64_000)) expect(4 + text.length).toBeLessThanOrEqual(40)
+    expect(agentMeta(meta({ lastTool: undefined }), 64_000, 40)[1]).toBe('12 tools \u00b7 18k tok')
+  })
+
+  test('typeName and toolName strip a plugin prefix and the MCP server', async () => {
+    expect(typeName('model-policy:reviewer')).toBe('reviewer')
+    expect(typeName('coder')).toBe('coder')
+    expect(toolName('mcp__plugin-authoring__scan_secrets')).toBe('scan_secrets')
+    expect(toolName('mcp__x')).toBe('x')
+    expect(toolName('Edit')).toBe('Edit')
+  })
+
+  test('a single tool is singular', async () => {
+    expect(agentMeta(meta({ tools: 1 }), 64_000, 40)[1]).toBe('1 tool \u00b7 18k tok \u00b7 Edit')
+    expect(agentMeta(meta({ tools: 0 }), 64_000, 40)[1]).toBe('0 tools \u00b7 18k tok \u00b7 Edit')
+  })
+
+  test('long names shorten, and duration and token count survive at 40 columns', async () => {
+    const worst = meta({
+      type: 'a-very-long-plugin:an-extremely-long-agent-type-name',
+      lastTool: 'mcp__plugin-authoring__a_really_long_tool_name_here',
+      tools: 123,
+      tokens: 456_000,
+      startedAt: 0,
+    })
+    const [one, two] = agentMeta(worst, 3_723_000, 40)
+    expect(one.endsWith(' \u00b7 Sonnet \u00b7 1h 02m')).toBe(true)
+    expect(two.startsWith('123 tools \u00b7 456k tok \u00b7 ')).toBe(true)
+    expect(one.includes('~')).toBe(true)
+    expect(two.includes('~')).toBe(true)
+    for (const text of [one, two]) expect(META_INDENT + text.length).toBeLessThanOrEqual(40)
+  })
+
+  test('the real long names fit 40 columns with duration and tokens whole', async () => {
+    const [one, two] = agentMeta(
+      meta({ type: 'model-policy:reviewer', lastTool: 'mcp__plugin-authoring__scan_secrets' }),
+      64_000,
+      40,
+    )
+    expect(one).toBe('reviewer \u00b7 Sonnet \u00b7 1m 04s')
+    expect(two).toBe('12 tools \u00b7 18k tok \u00b7 scan_secrets')
+  })
+
+  test('a very narrow pane drops the tool but keeps the counts', async () => {
+    const [one, two] = agentMeta(meta(), 64_000, 22)
+    expect(two).toBe('12 tools \u00b7 18k tok')
+    expect(one.endsWith('1m 04s')).toBe(true)
   })
 
   test('familyName capitalizes the family', async () => {

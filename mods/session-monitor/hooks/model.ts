@@ -224,21 +224,36 @@ export const formatTokens = (n: number): string => {
 /** Terminal rows one agent takes: the description and the two meta rows. */
 export const AGENT_ROWS = 3
 
+/** Spaces the pane puts before each meta row. */
+export const META_INDENT = 4
+
+/** `model-policy:reviewer` becomes `reviewer`. */
+export const typeName = (type: string): string => type.slice(type.lastIndexOf(':') + 1)
+
+/** `mcp__plugin-authoring__scan_secrets` becomes `scan_secrets`. Other tools keep their name. */
+export const toolName = (tool: string): string =>
+  tool.startsWith('mcp__') ? (tool.split('__').pop() ?? tool) : tool
+
+const SEP = ' \u00b7 '
+
 /**
- * The two meta rows of an agent, each short enough for a 40 column dock:
+ * The two meta rows of an agent for a pane `cols` wide:
  * `coder \u00b7 Sonnet \u00b7 1m 04s`, then `12 tools \u00b7 18k tok \u00b7 Edit`.
- * The last tool shows only while the agent runs.
+ * The last tool shows only while the agent runs. Only the type and the last tool
+ * shorten to fit, so the model, duration, tool count and tokens always show.
  */
-export const agentMeta = (r: AgentRow, now: number): [string, string] => [
-  [
-    r.type,
-    familyName(r.model),
-    formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt)),
-  ].join(' \u00b7 '),
-  [`${r.tools} tools`, `${formatTokens(r.tokens)} tok`, r.status === 'running' ? r.lastTool : undefined]
-    .filter(Boolean)
-    .join(' \u00b7 '),
-]
+export const agentMeta = (r: AgentRow, now: number, cols: number): [string, string] => {
+  const width = Math.max(0, cols - META_INDENT)
+  const rest = [familyName(r.model), formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt))]
+  const type = truncate(typeName(r.type), Math.max(1, width - [''].concat(rest).join(SEP).length))
+  const stats = [r.tools === 1 ? '1 tool' : `${r.tools} tools`, `${formatTokens(r.tokens)} tok`]
+  const tool = r.status === 'running' && r.lastTool ? toolName(r.lastTool) : undefined
+  const room = width - stats.join(SEP).length - SEP.length
+  return [
+    [type, ...rest].join(SEP),
+    (tool !== undefined && room > 0 ? [...stats, truncate(tool, room)] : stats).join(SEP),
+  ]
+}
 
 export type Bar = { filled: string; empty: string }
 
