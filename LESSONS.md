@@ -1,6 +1,6 @@
 # Lessons
 
-Mistakes worth remembering, newest first. Step 8 of the `ship-a-change` skill adds entries. When a mistake shows up here twice, it needs a lasting fix instead of a second entry.
+Mistakes worth remembering, newest first. Step 7 of the `ship-a-change` skill adds entries. When a mistake shows up here twice, it needs a lasting fix instead of a second entry.
 
 ## 2026-11-10: Renaming the marketplace broke existing installs
 - What happened: the marketplace rename only changed the new name in the installers, so re-running install.sh on a machine with the old marketplace failed, and a fresh clone loaded every mod twice.
