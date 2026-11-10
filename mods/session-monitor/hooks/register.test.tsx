@@ -193,6 +193,7 @@ function engine(
   opts: {
     policy?: { enabled?: boolean; usage: Record<string, unknown> }
     limits?: { kind: string; percentUsed: number; resetsAt?: string }[]
+    worktree?: boolean
   } = {},
 ) {
   const opens: Open[] = []
@@ -223,10 +224,14 @@ function engine(
   on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'a1' }))
   on('session.cwd', () => ({ value: '/work/claude-skills' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('process.run', () => ({
+  on('process.run', (_, e) => ({
     value: {
       exitCode: 0,
-      stdout: '# branch.oid abc1234\n# branch.head main\n? x\n',
+      stdout: e.argv.includes('rev-parse')
+        ? opts.worktree
+          ? '/work/.git/worktrees/w\n/work/.git\n'
+          : '/work/.git\n/work/.git\n'
+        : '# branch.oid abc1234\n# branch.head main\n? x\n',
       stderr: '',
       isStdoutTruncated: false,
       isStderrTruncated: false,
@@ -428,5 +433,124 @@ test('a limit with a known reset gets a projection row, within 40 columns', asyn
   expect(projection?.text?.length).toBeLessThanOrEqual(40)
   expect(await ui.find({ type: 'Text', text: /7d .*10%.* resets [A-Z][a-z]{2} \d+:\d{2}/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /5h .*60%.* resets 3h 00m/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const EDIT = '/work/claude-skills/mods/session-monitor/hooks/register.tsx'
+
+test('tool calls without an agent id show on the Main session row', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Edit', file_path: EDIT } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/etc/hosts' } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /Main session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}2 tools \u00b7 Read$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}edits .*hooks \(1 file\)$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('pressing a row expands it and pressing again collapses it', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn(SPAWN)
+  await $.tool.call({ tool: 'Edit', agentId: 'a1', file_path: EDIT } as never)
+  await $.tool.call({ tool: 'Edit', agentId: 'a1', file_path: EDIT } as never)
+  await $.tool.call({ tool: 'Read', agentId: 'a1', file_path: '/etc/hosts' } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /Write render code/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ \u25b8$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}Edited$/ })).toBeUndefined()
+
+  const row = (await ui.findAll({ type: 'Button' })).find(b => /Write render code/.test(b.text ?? ''))
+  expect(row?.key).toBeDefined()
+  await ui.press({ key: row?.key ?? '' })
+  expect(await ui.find({ type: 'Text', text: /^ {4}Edited$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {8}register\.tsx \u00d72$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}Read$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {4}Recent: Edit \u2192 Edit \u2192 Read$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ \u25be$/ })).toBeDefined()
+
+  await ui.press({ key: row?.key ?? '' })
+  expect(await ui.find({ type: 'Text', text: /^ {4}Edited$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('an expanded row stays within 40 columns', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn(SPAWN)
+  const long = '/work/claude-skills/mods/a-very-long-folder-name/with/many/levels/of/nesting/and-a-long-file-name.tsx'
+  await $.tool.call({ tool: 'Edit', agentId: 'a1', file_path: long } as never)
+  await $.tool.call({ tool: 'Read', agentId: 'a1', file_path: '/very/long/absolute/path/outside/the/session/folder/x.ts' } as never)
+  await $.tool.call({ tool: 'mcp__plugin-authoring__scan_secrets', agentId: 'a1' } as never)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  const row = (await ui.findAll({ type: 'Button' })).find(b => /Write render code/.test(b.text ?? ''))
+  await ui.press({ key: row?.key ?? '' })
+  const texts = await ui.findAll({ type: 'Text' })
+  expect(texts.length).toBeGreaterThan(10)
+  for (const text of texts) expect((text.text ?? '').length).toBeLessThanOrEqual(40)
+  expect(await ui.find({ type: 'Text', text: /\u2026/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('rows saved under the old shape are discarded', async ($, on) => {
+  engine(on)
+  // What agents-1 stored has no tool paths. A value under another tag reads as the initial value.
+  on('state.get', { plugin: 'session-monitor', key: 'agents' }, () => ({
+    value: {
+      value: [
+        {
+          key: 'old',
+          description: 'left over from agents-1',
+          type: 'coder',
+          status: 'running',
+          startedAt: 0,
+          tools: 3,
+          tokens: 0,
+        },
+      ],
+      version: 1,
+    },
+  }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /left over from agents-1/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /none yet/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the folder line opens a row with the full path and worktree', async ($, on) => {
+  engine(on, { worktree: true })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  expect(await ui.find({ type: 'Text', text: /^ {2}\/work\/claude-skills$/ })).toBeUndefined()
+  await ui.press({ key: 'header' })
+  expect(await ui.find({ type: 'Text', text: /^ {2}\/work\/claude-skills$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ {2}worktree$/ })).toBeDefined()
+  await ui.press({ key: 'header' })
+  expect(await ui.find({ type: 'Text', text: /^ {2}worktree$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a folder that is not a worktree shows no worktree row', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  await ui.press({ key: 'header' })
+  expect(await ui.find({ type: 'Text', text: /^ {2}\/work\/claude-skills$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /worktree/ })).toBeUndefined()
   await ui.unmount()
 })

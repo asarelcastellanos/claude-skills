@@ -1,9 +1,110 @@
-import type { AgentRow, AgentStatus, EnvInfo } from '../types'
+import type { Activity, AgentRow, AgentStatus, EnvInfo, PathCount } from '../types'
 
 /** Rows kept in state. Running rows are never dropped. */
 export const MAX_KEPT = 30
 
 export type Severity = 'ok' | 'warn' | 'crit'
+
+/** Distinct paths kept per agent. Calls on more paths only add to `morePaths`. */
+export const PATH_CAP = 50
+/** Tool names kept for the `Recent:` line. */
+export const RECENT_KEPT = 4
+
+export const emptyActivity = (): Activity => ({
+  tools: 0,
+  recent: [],
+  edits: [],
+  reads: [],
+  morePaths: 0,
+})
+
+/** The paths one tool call touched. `searched` holds folders (Glob and Grep). */
+export type Touched = { edits: string[]; reads: string[]; searched: string[] }
+
+const NOTHING: Touched = { edits: [], reads: [], searched: [] }
+
+const some = (v: unknown): string[] => (typeof v === 'string' && v !== '' ? [v] : [])
+
+/**
+ * The paths a tool call names in its input. Only the file tools count: what a
+ * shell command touches cannot be read from its text (see LESSONS.md).
+ */
+export const toolPaths = (input: object): Touched => {
+  // A tool call's input is external data: each field is read as unknown and checked.
+  const e = input as Readonly<Record<string, unknown>>
+  switch (e.tool) {
+    case 'Edit':
+    case 'Write':
+      return { ...NOTHING, edits: some(e.file_path) }
+    case 'NotebookEdit':
+      return { ...NOTHING, edits: some(e.notebook_path) }
+    case 'Read':
+      return { ...NOTHING, reads: some(e.file_path) }
+    case 'Glob':
+    case 'Grep':
+      return { ...NOTHING, searched: some(e.path) }
+    default:
+      return NOTHING
+  }
+}
+
+/** `/work/repo/src/a.ts` becomes `src/a.ts` inside `/work/repo`. Paths outside stay absolute. */
+export const relativize = (path: string, cwd: string | undefined): string => {
+  if (cwd === undefined) return path
+  const base = cwd.replace(/[\\/]+$/, '')
+  if (base === '') return path
+  if (path === base) return '.'
+  const sep = path.charAt(base.length)
+  return path.startsWith(base) && (sep === '/' || sep === '\\') ? path.slice(base.length + 1) : path
+}
+
+export const touchedIn = (t: Touched, cwd: string | undefined): Touched => ({
+  edits: t.edits.map(p => relativize(p, cwd)),
+  reads: t.reads.map(p => relativize(p, cwd)),
+  searched: t.searched.map(p => relativize(p, cwd)),
+})
+
+type Paths = Pick<Activity, 'edits' | 'reads' | 'morePaths'>
+
+/** Add `n` touches of `path`. A new path past PATH_CAP distinct paths only counts toward `morePaths`. */
+const countPath = (acc: Paths, kind: 'edits' | 'reads', path: string, n: number): Paths => {
+  const list = acc[kind]
+  if (list.some(([p]) => p === path)) {
+    return { ...acc, [kind]: list.map(([p, c]): PathCount => (p === path ? [p, c + n] : [p, c])) }
+  }
+  const known = new Set([...acc.edits, ...acc.reads].map(([p]) => p))
+  if (!known.has(path) && known.size >= PATH_CAP) return { ...acc, morePaths: acc.morePaths + n }
+  return { ...acc, [kind]: [...list, [path, n] as PathCount] }
+}
+
+const asFolder = (path: string): string => (path.endsWith('/') ? path : `${path}/`)
+
+/** Record one tool call: the count, the last and recent tool names, and the paths. */
+export const withTool = (a: Activity, tool: string, t: Touched): Activity => {
+  let paths: Paths = { edits: a.edits, reads: a.reads, morePaths: a.morePaths }
+  for (const p of t.edits) paths = countPath(paths, 'edits', p, 1)
+  for (const p of t.reads) paths = countPath(paths, 'reads', p, 1)
+  for (const p of t.searched) paths = countPath(paths, 'reads', asFolder(p), 1)
+  return {
+    tools: a.tools + 1,
+    lastTool: tool,
+    recent: [...a.recent, tool].slice(-RECENT_KEPT),
+    ...paths,
+  }
+}
+
+/** Fold the activity of `b` into `a`, as when a spawn result arrives after the agent's first events. */
+export const mergeActivity = (a: Activity, b: Activity): Activity => {
+  let paths: Paths = { edits: a.edits, reads: a.reads, morePaths: a.morePaths + b.morePaths }
+  for (const [p, n] of b.edits) paths = countPath(paths, 'edits', p, n)
+  for (const [p, n] of b.reads) paths = countPath(paths, 'reads', p, n)
+  return {
+    tools: a.tools + b.tools,
+    lastTool: b.lastTool ?? a.lastTool,
+    recent: [...a.recent, ...b.recent].slice(-RECENT_KEPT),
+    ...paths,
+  }
+}
 
 export type Spawned = {
   key: string
@@ -25,8 +126,8 @@ export const spawned = (rows: AgentRow[], s: Spawned): AgentRow[] =>
       workflowIndex: s.workflowIndex,
       status: 'running',
       startedAt: s.now,
-      tools: 0,
       tokens: 0,
+      ...emptyActivity(),
     },
   ])
 
@@ -37,8 +138,8 @@ const placeholder = (id: string, now: number): AgentRow => ({
   type: 'agent',
   status: 'running',
   startedAt: now,
-  tools: 0,
   tokens: 0,
+  ...emptyActivity(),
 })
 
 /** Change the row for an agent id, creating a stand-in when events beat the spawn result. */
@@ -77,9 +178,8 @@ export const resolved = (
       if (early === undefined) return base
       return {
         ...base,
-        tools: base.tools + early.tools,
+        ...mergeActivity(base, early),
         tokens: base.tokens + early.tokens,
-        lastTool: early.lastTool ?? base.lastTool,
         status: early.status,
         endedAt: early.endedAt,
       }
@@ -120,8 +220,8 @@ export const toolCalled = (
   id: string,
   tool: string,
   now: number,
-): AgentRow[] =>
-  touch(rows, id, now, r => ({ ...r, tools: r.tools + 1, lastTool: tool }))
+  touched: Touched = NOTHING,
+): AgentRow[] => touch(rows, id, now, r => ({ ...r, ...withTool(r, tool, touched) }))
 
 export const completed = (
   rows: AgentRow[],
@@ -502,8 +602,15 @@ export const headerPlan = (
     ? { kind: 'crab', rows: CRAB.length }
     : { kind: 'line', rows: hasEnv ? 2 : 1 }
 
-/** Rows the sections take besides the header and the agent rows: separators, titles and fixed lines. */
-export const fixedRows = (usageRows: number, policyLineCount: number): number => {
+/**
+ * Rows the sections take besides the header and the agent rows: separators, titles and fixed
+ * lines. `extraRows` are rows the person opened under the header.
+ */
+export const fixedRows = (
+  usageRows: number,
+  policyLineCount: number,
+  extraRows = 0,
+): number => {
   const sections = [
     2,
     2,
@@ -512,7 +619,7 @@ export const fixedRows = (usageRows: number, policyLineCount: number): number =>
     1,
   ]
   // One blank row after the header, one between each pair of sections.
-  return 1 + sections.reduce((a, b) => a + b, 0) + (sections.length - 1)
+  return 1 + sections.reduce((a, b) => a + b, 0) + (sections.length - 1) + extraRows
 }
 
 export type RuleParts = { lead: string; title: string; tail: string }
@@ -543,3 +650,135 @@ export const policyLines = (enabled: boolean, usage: PolicyUsage): string[] => [
     f => `${f.padEnd(7)} ${formatTokens(usage[f]?.tokens ?? 0)}`,
   ),
 ]
+
+/** Keeps the end of a path: `\u2026/hooks/register.tsx`. */
+export const truncateLeft = (text: string, width: number): string =>
+  width <= 0
+    ? ''
+    : text.length <= width
+      ? text
+      : width === 1
+        ? '\u2026'
+        : `\u2026${text.slice(text.length - (width - 1))}`
+
+export type FolderGroup = { folder: string; files: PathCount[] }
+
+const splitPath = (path: string): { folder: string; name: string } => {
+  if (path.endsWith('/')) return { folder: path.slice(0, -1) || '/', name: '' }
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (i < 0) return { folder: '.', name: path }
+  return { folder: i === 0 ? '/' : path.slice(0, i), name: path.slice(i + 1) }
+}
+
+/** Paths grouped by folder, in the order each folder first appears. A searched folder has a file named ''. */
+export const groupByFolder = (list: readonly PathCount[]): FolderGroup[] => {
+  const groups: FolderGroup[] = []
+  for (const [path, count] of list) {
+    const { folder, name } = splitPath(path)
+    let group = groups.find(g => g.folder === folder)
+    if (group === undefined) {
+      group = { folder, files: [] }
+      groups.push(group)
+    }
+    group.files.push([name, count])
+  }
+  return groups
+}
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+
+/**
+ * One line on what an agent edited: `edits mods/x/hooks (2 files)`, `edits 3 folders (5 files)`,
+ * or `no edits`. Undefined before the agent's first tool call. `width` is the room for the line.
+ */
+export const editSummary = (a: Activity, width: number): string | undefined => {
+  if (a.tools === 0) return undefined
+  const groups = groupByFolder(a.edits)
+  if (groups.length === 0) return 'no edits'
+  const files = plural(a.edits.length, 'file', 'files')
+  const only = groups[0]
+  if (groups.length === 1 && only !== undefined) {
+    const lead = 'edits '
+    const tail = ` (${files})`
+    return `${lead}${truncateLeft(only.folder, width - lead.length - tail.length)}${tail}`
+  }
+  return `edits ${groups.length} folders (${files})`
+}
+
+/** The rows under an expanded row: edited files, read folders and recent tools. Indent 4. */
+export const detailRows = (a: Activity, cols: number): string[] => {
+  const rows: string[] = []
+  const pathRow = (indent: number, text: string, tail = ''): string =>
+    `${' '.repeat(indent)}${truncateLeft(text, cols - indent - tail.length)}${tail}`
+  if (a.edits.length > 0) {
+    rows.push('    Edited')
+    for (const g of groupByFolder(a.edits)) {
+      rows.push(pathRow(6, g.folder))
+      for (const [name, count] of g.files) rows.push(pathRow(8, `${name} \u00d7${count}`))
+    }
+  }
+  if (a.reads.length > 0) {
+    rows.push('    Read')
+    for (const g of groupByFolder(a.reads)) {
+      const named = g.files.filter(([name]) => name !== '').length
+      rows.push(pathRow(6, g.folder, ` (${named === 0 ? 'searched' : plural(named, 'file', 'files')})`))
+    }
+  }
+  if (a.morePaths > 0) rows.push(`    +${a.morePaths} more`)
+  const recent = a.recent.flatMap(t => toolName(t) ?? [])
+  if (recent.length > 0) rows.push(truncate(`    Recent: ${recent.join(' \u2192 ')}`, cols))
+  return rows
+}
+
+/** The rows after an agent's title and meta rows: the detail when expanded, else the edit summary. */
+export const extraRows = (a: Activity, cols: number, expanded: boolean): string[] => {
+  if (expanded) return detailRows(a, cols)
+  const summary = editSummary(a, cols - META_INDENT)
+  return summary === undefined ? [] : [`${' '.repeat(META_INDENT)}${summary}`]
+}
+
+/** The single meta row of the main session: its tool count and last tool. */
+export const mainMeta = (a: Activity): string => {
+  const last = a.lastTool === undefined ? undefined : toolName(a.lastTool)
+  return [plural(a.tools, 'tool', 'tools'), last].filter(Boolean).join(SEP)
+}
+
+/** Rows opened under the header: the session folder, and `worktree` for a linked worktree. */
+export const headerRows = (env: EnvInfo | null | undefined, cols: number): string[] =>
+  env?.cwd === undefined
+    ? []
+    : [`  ${truncateLeft(env.cwd, cols - 2)}`, ...(env.isWorktree ? ['  worktree'] : [])]
+
+export type Block = { height: number; pinned: boolean }
+
+/**
+ * The blocks that fit `lines` rows, in order. Once one block does not fit, no later
+ * block is shown. A pinned block (one the person expanded) is always shown and takes its rows.
+ */
+export const fitBlocks = <T extends Block>(
+  items: readonly T[],
+  lines: number,
+): { shown: T[]; hidden: number } => {
+  const shown: T[] = []
+  let left = lines
+  let full = false
+  for (const item of items) {
+    if (item.pinned || (!full && item.height <= left)) {
+      shown.push(item)
+      left -= item.height
+    } else {
+      full = true
+    }
+  }
+  return { shown, hidden: items.length - shown.length }
+}
+
+/**
+ * Whether the folder is a linked git worktree, from `git rev-parse --path-format=absolute
+ * --git-dir --git-common-dir`: the two differ only in a linked worktree.
+ */
+export const parseWorktree = (exitCode: number, stdout: string): boolean => {
+  if (exitCode !== 0) return false
+  const lines = stdout.split('\n').map(l => l.trim()).filter(Boolean)
+  return lines.length === 2 && lines[0] !== lines[1]
+}

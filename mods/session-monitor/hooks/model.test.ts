@@ -11,12 +11,19 @@ import {
   CRAB_MIN_COLS,
   CRIT_RED,
   denied,
+  emptyActivity,
+  detailRows,
+  editSummary,
   envLine,
+  extraRows,
   family,
   familyName,
+  fitBlocks,
   fixedRows,
   hasRunning,
+  groupByFolder,
   headerPlan,
+  headerRows,
   friendlyModel,
   formatDuration,
   formatClock,
@@ -24,13 +31,18 @@ import {
   formatWeekdayTime,
   formatTokens,
   locationLine,
+  mainMeta,
+  mergeActivity,
   META_INDENT,
   MIN_COLS,
   order,
   parseGitStatus,
+  parseWorktree,
+  PATH_CAP,
   policyLines,
   projectLimit,
   resetText,
+  relativize,
   resumed,
   resolved,
   rule,
@@ -41,15 +53,20 @@ import {
   SPINNER,
   spinnerFrame,
   symbol,
-  toolCalled,
   trim,
+  toolCalled,
   toolName,
+  toolPaths,
+  touchedIn,
+  truncateLeft,
+  withTool,
   truncate,
   typeName,
   visible,
   WARN_AMBER,
   WINDOW_MS,
 } from './model'
+import type { Touched } from './model'
 
 const spawn = (rows: AgentRow[], key: string, now: number) =>
   spawned(rows, { key, description: key, type: 'Explore', now })
@@ -309,7 +326,7 @@ describe('friendlyModel', () => {
 })
 
 describe('environment lines', () => {
-  const env = { folder: 'repo', branch: 'main', dirty: true, model: 'Opus 5.5', gitAt: 0 }
+  const env = { folder: 'repo', branch: 'main', dirty: true, isWorktree: false, model: 'Opus 5.5', gitAt: 0 }
 
   test('envLine has every segment', async () => {
     expect(envLine(env)).toBe('repo \u00b7 main* \u00b7 Opus 5.5')
@@ -323,7 +340,7 @@ describe('environment lines', () => {
   test('each of folder and model can be missing', async () => {
     expect(envLine({ ...env, folder: undefined })).toBe('main* \u00b7 Opus 5.5')
     expect(envLine({ ...env, model: undefined })).toBe('repo \u00b7 main*')
-    expect(envLine({ dirty: false, gitAt: 0 })).toBe('')
+    expect(envLine({ dirty: false, isWorktree: false, gitAt: 0 })).toBe('')
     expect(envLine(null)).toBe('')
   })
 
@@ -360,6 +377,7 @@ describe('pane layout', () => {
   })
 
   const meta = (over: Partial<AgentRow> = {}): AgentRow => ({
+    ...emptyActivity(),
     key: 'k',
     description: 'd',
     type: 'coder',
@@ -589,5 +607,223 @@ describe('limit projection', () => {
 
   test('projection rows count in fixedRows', async () => {
     expect(fixedRows(4, 0)).toBe(fixedRows(2, 0) + 2)
+  })
+})
+
+describe('tool path tracking', () => {
+  test('toolPaths reads the file tools and nothing else', async () => {
+    expect(toolPaths({ tool: 'Edit', file_path: 'a.ts' })).toEqual({ edits: ['a.ts'], reads: [], searched: [] })
+    expect(toolPaths({ tool: 'Write', file_path: 'b.ts' }).edits).toEqual(['b.ts'])
+    expect(toolPaths({ tool: 'NotebookEdit', notebook_path: 'n.ipynb' }).edits).toEqual(['n.ipynb'])
+    expect(toolPaths({ tool: 'Read', file_path: 'c.ts' }).reads).toEqual(['c.ts'])
+    expect(toolPaths({ tool: 'Glob', pattern: '*.ts', path: 'src' }).searched).toEqual(['src'])
+    expect(toolPaths({ tool: 'Grep', pattern: 'x', path: 'lib' }).searched).toEqual(['lib'])
+    expect(toolPaths({ tool: 'Grep', pattern: 'x' })).toEqual({ edits: [], reads: [], searched: [] })
+    expect(toolPaths({ tool: 'Edit', file_path: '' }).edits).toEqual([])
+    expect(toolPaths({ tool: 'Edit', file_path: 42 }).edits).toEqual([])
+  })
+
+  test('a shell command is never parsed for paths', async () => {
+    expect(toolPaths({ tool: 'Bash', command: 'sed -i s/a/b/ src/a.ts > out.txt' })).toEqual({
+      edits: [],
+      reads: [],
+      searched: [],
+    })
+    expect(toolPaths({ tool: 'mcp__x__write', file_path: 'a.ts' }).edits).toEqual([])
+  })
+
+  test('relativize keeps paths inside the folder relative and the rest absolute', async () => {
+    expect(relativize('/work/repo/src/a.ts', '/work/repo')).toBe('src/a.ts')
+    expect(relativize('/work/repo/src/a.ts', '/work/repo/')).toBe('src/a.ts')
+    expect(relativize('/work/repo', '/work/repo')).toBe('.')
+    expect(relativize('/work/repo2/a.ts', '/work/repo')).toBe('/work/repo2/a.ts')
+    expect(relativize('/etc/hosts', '/work/repo')).toBe('/etc/hosts')
+    expect(relativize('C:\\work\\repo\\a.ts', 'C:\\work\\repo')).toBe('a.ts')
+    expect(relativize('/a/b', undefined)).toBe('/a/b')
+    expect(touchedIn({ edits: ['/w/r/a.ts'], reads: ['/x/b.ts'], searched: ['/w/r/lib'] }, '/w/r')).toEqual({
+      edits: ['a.ts'],
+      reads: ['/x/b.ts'],
+      searched: ['lib'],
+    })
+  })
+
+  test('withTool counts edits per file and keeps the last four tool names', async () => {
+    let a = emptyActivity()
+    for (const [tool, input] of [
+      ['Edit', { edits: ['src/a.ts'] }],
+      ['Edit', { edits: ['src/a.ts'] }],
+      ['Read', { reads: ['src/b.ts'] }],
+      ['Bash', {}],
+      ['Edit', { edits: ['lib/c.ts'] }],
+    ] as [string, Partial<Touched>][]) {
+      a = withTool(a, tool, { edits: [], reads: [], searched: [], ...input })
+    }
+    expect(a.tools).toBe(5)
+    expect(a.lastTool).toBe('Edit')
+    expect(a.edits).toEqual([['src/a.ts', 2], ['lib/c.ts', 1]])
+    expect(a.reads).toEqual([['src/b.ts', 1]])
+    expect(a.recent).toEqual(['Edit', 'Read', 'Bash', 'Edit'])
+  })
+
+  test('a searched folder is stored with a trailing slash', async () => {
+    const a = withTool(emptyActivity(), 'Grep', { edits: [], reads: [], searched: ['lib'] })
+    expect(a.reads).toEqual([['lib/', 1]])
+  })
+
+  test('paths past the cap only add to morePaths, and known paths still count', async () => {
+    let a = emptyActivity()
+    for (let i = 0; i < PATH_CAP; i++) a = withTool(a, 'Edit', { edits: [`f${i}.ts`], reads: [], searched: [] })
+    expect(a.edits.length).toBe(PATH_CAP)
+    a = withTool(a, 'Edit', { edits: ['extra.ts'], reads: [], searched: [] })
+    a = withTool(a, 'Read', { edits: [], reads: ['other.ts'], searched: [] })
+    expect(a.edits.length).toBe(PATH_CAP)
+    expect(a.reads).toEqual([])
+    expect(a.morePaths).toBe(2)
+    a = withTool(a, 'Edit', { edits: ['f0.ts'], reads: [], searched: [] })
+    expect(a.edits[0]).toEqual(['f0.ts', 2])
+    // A file already edited counts once toward the cap when it is read too.
+    a = withTool(a, 'Read', { edits: [], reads: ['f1.ts'], searched: [] })
+    expect(a.reads).toEqual([['f1.ts', 1]])
+    expect(a.morePaths).toBe(2)
+  })
+
+  test('toolCalled records the paths on the agent row', async () => {
+    let rows = spawned([], { key: 'a', description: 'a', type: 'Explore', now: 0 })
+    rows = resolved(rows, 'a', 'id-a', undefined)
+    rows = toolCalled(rows, 'id-a', 'Edit', 5, { edits: ['x.ts'], reads: [], searched: [] })
+    expect(rows[0]?.edits).toEqual([['x.ts', 1]])
+    expect(rows[0]?.tools).toBe(1)
+  })
+
+  test('mergeActivity adds counts and joins the recent names', async () => {
+    const a = withTool(emptyActivity(), 'Edit', { edits: ['a.ts'], reads: [], searched: [] })
+    const b = withTool(withTool(emptyActivity(), 'Read', { edits: [], reads: ['r.ts'], searched: [] }), 'Edit', {
+      edits: ['a.ts'],
+      reads: [],
+      searched: [],
+    })
+    const m = mergeActivity(a, b)
+    expect(m.tools).toBe(3)
+    expect(m.edits).toEqual([['a.ts', 2]])
+    expect(m.reads).toEqual([['r.ts', 1]])
+    expect(m.recent).toEqual(['Edit', 'Read', 'Edit'])
+  })
+
+  test('truncateLeft keeps the end', async () => {
+    expect(truncateLeft('mods/session-monitor/hooks/register.tsx', 20).length).toBe(20)
+    expect(truncateLeft('mods/session-monitor/hooks/register.tsx', 20).endsWith('/register.tsx')).toBe(true)
+    expect(truncateLeft('abc', 5)).toBe('abc')
+    expect(truncateLeft('abcdef', 1)).toBe('\u2026')
+    expect(truncateLeft('abcdef', 0)).toBe('')
+  })
+
+  test('groupByFolder groups in first-seen order', async () => {
+    expect(groupByFolder([['a/x.ts', 2], ['b/y.ts', 1], ['a/z.ts', 1], ['top.ts', 1], ['/abs/q.ts', 1], ['lib/', 3]])).toEqual([
+      { folder: 'a', files: [['x.ts', 2], ['z.ts', 1]] },
+      { folder: 'b', files: [['y.ts', 1]] },
+      { folder: '.', files: [['top.ts', 1]] },
+      { folder: '/abs', files: [['q.ts', 1]] },
+      { folder: 'lib', files: [['', 3]] },
+    ])
+  })
+
+  const act = (edits: [string, number][], tools = 3, reads: [string, number][] = []) => ({
+    ...emptyActivity(),
+    tools,
+    edits,
+    reads,
+    recent: ['Edit', 'Read', 'Bash', 'Edit'],
+  })
+
+  test('editSummary', async () => {
+    expect(editSummary(act([], 0), 36)).toBeUndefined()
+    expect(editSummary(act([]), 36)).toBe('no edits')
+    expect(editSummary(act([['mods/session-monitor/hooks/a.ts', 1], ['mods/session-monitor/hooks/b.ts', 2]]), 50)).toBe(
+      'edits mods/session-monitor/hooks (2 files)',
+    )
+    expect(editSummary(act([['a/1.ts', 1], ['b/2.ts', 1], ['c/3.ts', 1], ['c/4.ts', 1], ['c/5.ts', 1]]), 36)).toBe(
+      'edits 3 folders (5 files)',
+    )
+    expect(editSummary(act([['x.ts', 1]]), 36)).toBe('edits . (1 file)')
+  })
+
+  test('editSummary shortens a long folder from the left to fit', async () => {
+    const s = editSummary(act([['mods/session-monitor/hooks/deep/er/a.ts', 1]]), 30)
+    expect(s?.length).toBeLessThanOrEqual(30)
+    expect(s?.startsWith('edits \u2026')).toBe(true)
+    expect(s?.endsWith(' (1 file)')).toBe(true)
+  })
+
+  test('detailRows list edited files, read folders and recent tools within the width', async () => {
+    const a = act(
+      [['mods/session-monitor/hooks/register.tsx', 3], ['mods/session-monitor/hooks/model.ts', 2]],
+      9,
+      [['mods/model-policy/hooks/a.ts', 1], ['mods/model-policy/hooks/b.ts', 1], ['lib/', 1]],
+    )
+    const rows = detailRows(a, 40)
+    expect(rows[0]).toBe('    Edited')
+    expect(rows).toContain('        register.tsx \u00d73')
+    expect(rows).toContain('        model.ts \u00d72')
+    expect(rows).toContain('    Read')
+    expect(rows.some(r => r.endsWith(' (2 files)'))).toBe(true)
+    expect(rows.some(r => r.endsWith('lib (searched)'))).toBe(true)
+    expect(rows.at(-1)).toBe('    Recent: Edit \u2192 Read \u2192 Bash \u2192 Edit')
+    for (const r of rows) expect(r.length).toBeLessThanOrEqual(40)
+    const narrow = detailRows(a, 24)
+    for (const r of narrow) expect(r.length).toBeLessThanOrEqual(24)
+    expect(narrow.some(r => r.includes('\u2026'))).toBe(true)
+  })
+
+  test('detailRows notes the paths past the cap and shortens MCP tool names', async () => {
+    const a = { ...act([]), morePaths: 3, recent: ['mcp__a__scan_secrets', 'mcp__'] }
+    expect(detailRows(a, 40)).toEqual(['    +3 more', '    Recent: scan_secrets'])
+  })
+
+  test('extraRows is the summary collapsed and the detail expanded', async () => {
+    const a = act([['src/a.ts', 1]])
+    expect(extraRows(a, 40, false)).toEqual(['    edits src (1 file)'])
+    expect(extraRows(a, 40, true)).toEqual(detailRows(a, 40))
+    expect(extraRows(act([], 0), 40, false)).toEqual([])
+  })
+
+  test('mainMeta shows the count and the last tool', async () => {
+    expect(mainMeta(emptyActivity())).toBe('0 tools')
+    expect(mainMeta({ ...emptyActivity(), tools: 1, lastTool: 'Read' })).toBe('1 tool \u00b7 Read')
+    expect(mainMeta({ ...emptyActivity(), tools: 4, lastTool: 'mcp__a__scan' })).toBe('4 tools \u00b7 scan')
+  })
+
+  test('fitBlocks keeps order, stops at the first miss and always shows pinned blocks', async () => {
+    const b = (key: string, height: number, pinned = false) => ({ key, height, pinned })
+    expect(fitBlocks([b('a', 3), b('b', 3), b('c', 3)], 7)).toEqual({ shown: [b('a', 3), b('b', 3)], hidden: 1 })
+    // A small block after a miss stays hidden, so the order is kept.
+    expect(fitBlocks([b('a', 5), b('b', 8), b('c', 1)], 6).shown.map(x => x.key)).toEqual(['a'])
+    // A pinned block shows past the room and takes the rows the others would have had.
+    const r = fitBlocks([b('a', 3), b('b', 9, true), b('c', 3)], 6)
+    expect(r.shown.map(x => x.key)).toEqual(['a', 'b'])
+    expect(r.hidden).toBe(1)
+    expect(fitBlocks([], 5)).toEqual({ shown: [], hidden: 0 })
+  })
+
+  test('parseWorktree is true only when the git dir and the common dir differ', async () => {
+    expect(parseWorktree(0, '/x/.git\n/x/.git\n')).toBe(false)
+    expect(parseWorktree(0, '/x/.git/worktrees/w\n/x/.git\n')).toBe(true)
+    expect(parseWorktree(128, '')).toBe(false)
+    expect(parseWorktree(0, '# branch.oid a\n# branch.head main\n? x\n')).toBe(false)
+  })
+
+  test('headerRows shows the folder and worktree, shortened from the left', async () => {
+    const env = { cwd: '/Users/someone/projects/claude-skills', isWorktree: true, dirty: false, gitAt: 0 }
+    const rows = headerRows(env, 24)
+    expect(rows.length).toBe(2)
+    expect(rows[0]?.length).toBeLessThanOrEqual(24)
+    expect(rows[0]?.trim().startsWith('\u2026')).toBe(true)
+    expect(rows[1]).toBe('  worktree')
+    expect(headerRows({ ...env, isWorktree: false }, 60)).toEqual(['  /Users/someone/projects/claude-skills'])
+    expect(headerRows({ isWorktree: false, dirty: false, gitAt: 0 }, 40)).toEqual([])
+    expect(headerRows(null, 40)).toEqual([])
+  })
+
+  test('fixedRows adds the rows opened under the header', async () => {
+    expect(fixedRows(2, 0, 2)).toBe(fixedRows(2, 0) + 2)
   })
 })

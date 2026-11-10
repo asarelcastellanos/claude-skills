@@ -14,6 +14,9 @@ import {
   CRAB_WIDTH,
   denied,
   envLine,
+  emptyActivity,
+  extraRows,
+  fitBlocks,
   fixedRows,
   formatDuration,
   formatTokens,
@@ -21,11 +24,15 @@ import {
   GIT_MIN_GAP_MS,
   hasRunning,
   headerPlan,
+  headerRows,
   limitLabel,
   locationLine,
+  mainMeta,
   META_INDENT,
   MIN_COLS,
+  order,
   parseGitStatus,
+  parseWorktree,
   policyLines,
   projectLimit,
   resetText,
@@ -38,8 +45,10 @@ import {
   STATUS_COLOR,
   symbol,
   toolCalled,
+  toolPaths,
+  touchedIn,
   truncate,
-  visible,
+  withTool,
 } from './model'
 import type { PolicyUsage } from './model'
 
@@ -52,13 +61,18 @@ const TICK_MS = 1000
 // Change a tag when the stored fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const agents = atom({ plugin: 'session-monitor', key: 'agents' } as const, [], {
-  shape: 'agents-1',
+  shape: 'agents-2',
 })
+const main = atom({ plugin: 'session-monitor', key: 'main' } as const, emptyActivity(), {
+  shape: 'main-1',
+})
+// Keys of the rows the person expanded: agent row keys, `main` and `header`.
+const opened = atom({ plugin: 'session-monitor', key: 'open' } as const, [])
 const usage = atom({ plugin: 'session-monitor', key: 'usage' } as const, null, {
   shape: 'usage-1',
 })
 const env = atom({ plugin: 'session-monitor', key: 'env' } as const, null, {
-  shape: 'env-1',
+  shape: 'env-2',
 })
 const clock = atom({ plugin: 'session-monitor', key: 'now' } as const, 0)
 
@@ -82,7 +96,12 @@ async function refreshEnv($: EngineInterface): Promise<EnvInfo> {
   try {
     model = friendlyModel(await $.session.model())
   } catch {}
-  let { branch, dirty, gitAt } = before ?? { branch: undefined, dirty: false, gitAt: 0 }
+  let { branch, dirty, gitAt, isWorktree } = before ?? {
+    branch: undefined,
+    dirty: false,
+    gitAt: 0,
+    isWorktree: false,
+  }
   if (!isGitRunning && now - gitAt >= GIT_MIN_GAP_MS) {
     isGitRunning = true
     try {
@@ -93,6 +112,15 @@ async function refreshEnv($: EngineInterface): Promise<EnvInfo> {
       const info = parseGitStatus(ran.exitCode, ran.stdout)
       branch = info?.branch
       dirty = info?.dirty ?? false
+      try {
+        const tree = await $.process.run(
+          ['git', 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
+          { cwd, timeoutMs: 2000 },
+        )
+        isWorktree = parseWorktree(tree.exitCode, tree.stdout)
+      } catch {
+        isWorktree = false
+      }
     } catch {
       branch = undefined
       dirty = false
@@ -101,7 +129,7 @@ async function refreshEnv($: EngineInterface): Promise<EnvInfo> {
       gitAt = now
     }
   }
-  const next: EnvInfo = { folder, branch, dirty, model, gitAt }
+  const next: EnvInfo = { folder, cwd, branch, dirty, isWorktree, model, gitAt }
   if (JSON.stringify(before) !== JSON.stringify(next)) {
     await update($, env, () => next)
   }
@@ -284,14 +312,18 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
-    if (e.agentId !== undefined) {
-      const id = e.agentId
-      // Bookkeeping must never block the tool call.
-      try {
-        const now = await $.clock.now()
-        await update($, agents, rows => toolCalled(rows, id, e.tool, now))
-      } catch {}
-    }
+    // Bookkeeping must never block or change the tool call.
+    try {
+      const now = await $.clock.now()
+      const cwd = (await read($, env))?.cwd ?? (await $.session.cwd().catch(() => undefined))
+      const touched = touchedIn(toolPaths(e), cwd)
+      if (e.agentId !== undefined) {
+        const id = e.agentId
+        await update($, agents, rows => toolCalled(rows, id, e.tool, now, touched))
+      } else {
+        await update($, main, activity => withTool(activity, e.tool, touched))
+      }
+    } catch {}
 
     return next(e)
   })
@@ -320,10 +352,12 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const rows = await read($, agents)
     const snap = await read($, usage)
     const info = await read($, env)
+    const mainActivity = await read($, main)
+    const openKeys = await read($, opened)
     const policy = await readPolicy($)
     await read($, clock)
     const now = await $.clock.now()
@@ -335,10 +369,31 @@ export const register: Register = on => {
     const policyRows = policy === undefined ? [] : policyLines(policy.enabled, policy.usage)
     const projections = limits.map(l => projectLimit(l, now))
     const usageRows = limits.length + projections.filter(p => p !== undefined).length
-    const other = fixedRows(usageRows, policyRows.length)
+    const headerOpen = openKeys.includes('header')
+    const headerExtra = headerOpen ? headerRows(info, cols) : []
+    const other = fixedRows(usageRows, policyRows.length, headerExtra.length)
     const plan = headerPlan(cols, height, other, envLine(info) !== '')
-    // One more row stays free for the "+N more" line.
-    const { shown, hidden } = visible(rows, height - plan.rows - other - 1, AGENT_ROWS)
+    // One row stays free for "none yet" or "+N more". An expanded row is always shown, whole:
+    // it takes the rows it needs and the pane scrolls past the room.
+    const items = [
+      { key: 'main', agent: undefined, activity: mainActivity },
+      ...order(rows).map(agent => ({ key: agent.key, agent, activity: agent })),
+    ].map(item => {
+      const expanded = openKeys.includes(item.key)
+      return {
+        ...item,
+        expanded,
+        pinned: expanded,
+        height:
+          (item.agent === undefined ? 2 : AGENT_ROWS) + extraRows(item.activity, cols, expanded).length,
+      }
+    })
+    const { shown, hidden } = fitBlocks(items, height - plan.rows - other - 1)
+    const toggle = (key: string) => () => {
+      update($, opened, keys =>
+        keys.includes(key) ? keys.filter(k => k !== key) : [...keys, key],
+      ).catch(() => {})
+    }
     const running = rows.filter(r => r.status === 'running').length
 
     const line = (text: string, color?: string, dim = false) => (
@@ -391,7 +446,12 @@ export const register: Register = on => {
               <Text color={CLAUDE_ORANGE}>{'✻ '}</Text>
               <Text bold>Claude Monitor</Text>
             </Text>
-            {crabRow(1, locationLine(info))}
+            <Box flexDirection="row">
+              <Text color={crabColor}>{(CRAB[1] ?? '').padEnd(CRAB_WIDTH + CRAB_GAP)}</Text>
+              <Button plain key="header" onPress={toggle('header')}>
+                <Text>{truncate(locationLine(info), side)}</Text>
+              </Button>
+            </Box>
             {crabRow(2, info?.model ?? '', { dim: true })}
           </Box>
         ) : (
@@ -400,9 +460,14 @@ export const register: Register = on => {
               <Text color={CLAUDE_ORANGE}>{'✻ '}</Text>
               <Text bold>{truncate('Claude Monitor', cols - 2)}</Text>
             </Text>
-            {envLine(info) !== '' && line(envLine(info), undefined, true)}
+            {envLine(info) !== '' && (
+              <Button plain key="header" onPress={toggle('header')}>
+                <Text dimColor>{truncate(envLine(info), cols)}</Text>
+              </Button>
+            )}
           </Box>
         )}
+        {headerExtra.map(text => line(text, undefined, true))}
         {blank()}
         {section('Session')}
         {snap === null
@@ -443,22 +508,27 @@ export const register: Register = on => {
           </Box>
         )}
         {section(`Agents · ${running} running · ${rows.length} total`)}
-        {rows.length === 0 && line('  none yet', undefined, true)}
-        {shown.map(r => {
-          const tag =
-            r.workflowIndex === undefined ? '' : ` [wf#${r.workflowIndex}]`
+        {shown.map(item => {
+          const a = item.agent
+          const tag = a?.workflowIndex === undefined ? '' : ` [wf#${a.workflowIndex}]`
+          const title = a === undefined ? 'Main session' : `${a.description}${tag}`
           return (
             <Box flexDirection="column">
-              <Text dimColor={r.status === 'untracked'}>
-                <Text color={STATUS_COLOR[r.status]}>
-                  {`  ${symbol(r.status, now)} `}
+              <Button plain key={`row:${item.key}`} onPress={toggle(item.key)}>
+                <Text color={a === undefined ? CLAUDE_ORANGE : STATUS_COLOR[a.status]}>
+                  {`  ${a === undefined ? '✻' : symbol(a.status, now)} `}
                 </Text>
-                {truncate(`${r.description}${tag}`, cols - 4)}
-              </Text>
-              {agentMeta(r, now, cols).map(text => line(`${' '.repeat(META_INDENT)}${text}`, undefined, true))}
+                <Text dimColor={a?.status === 'untracked'}>{truncate(title, cols - 6)}</Text>
+                <Text dimColor>{item.expanded ? ' ▾' : ' ▸'}</Text>
+              </Button>
+              {(a === undefined ? [mainMeta(mainActivity)] : agentMeta(a, now, cols)).map(text =>
+                line(`${' '.repeat(META_INDENT)}${text}`, undefined, true),
+              )}
+              {extraRows(item.activity, cols, item.expanded).map(text => line(text, undefined, true))}
             </Box>
           )
         })}
+        {rows.length === 0 && line('  none yet', undefined, true)}
         {hidden > 0 && line(`  +${hidden} more`, undefined, true)}
       </Box>
     )

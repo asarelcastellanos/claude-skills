@@ -1,6 +1,23 @@
 export type AgentStatus = 'running' | 'done' | 'failed' | 'denied' | 'untracked'
 
-export type AgentRow = {
+/** A path and how many tool calls touched it. */
+export type PathCount = [path: string, count: number]
+
+/** What one agent, or the main session, has done with its tools. */
+export type Activity = {
+  tools: number
+  lastTool?: string
+  /** The last few tool names, oldest first. */
+  recent: string[]
+  /** Files edited, relative to the session folder when inside it. */
+  edits: PathCount[]
+  /** Files read, and folders searched (a path ending in a slash). */
+  reads: PathCount[]
+  /** Tool calls on paths past the cap on distinct paths. */
+  morePaths: number
+}
+
+export type AgentRow = Activity & {
   /** Unique row key. Starts as the spawn's tool_use_id plus a counter, then stays. */
   key: string
   /** The engine's agent id, once the spawn resolved. */
@@ -14,8 +31,6 @@ export type AgentRow = {
   status: AgentStatus
   startedAt: number
   endedAt?: number
-  tools: number
-  lastTool?: string
   tokens: number
 }
 
@@ -34,6 +49,10 @@ export type EnvInfo = {
   /** Branch name, or a short hash when detached. Absent outside a git repo. */
   branch?: string
   dirty: boolean
+  /** The session's working directory. */
+  cwd?: string
+  /** True when the working directory belongs to a linked git worktree. */
+  isWorktree: boolean
   /** Friendly model name of the main loop. */
   model?: string
   /** When git last ran, in clock milliseconds. 0 before the first run. */
@@ -53,6 +72,10 @@ declare module 'claude-code' {
       usage: Shaped<UsageSnapshot | null>
       now: number
       env: Shaped<EnvInfo | null>
+      /** The main session's tool activity. */
+      main: Shaped<Activity>
+      /** Keys of the rows the person expanded: agent row keys, `main` and `header`. */
+      open: string[]
     }
     'model-policy': {
       /** False after `/model-policy off`. Unset means on. */
