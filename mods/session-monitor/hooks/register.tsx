@@ -16,7 +16,6 @@ import {
   envLine,
   fixedRows,
   formatDuration,
-  formatReset,
   formatTokens,
   friendlyModel,
   GIT_MIN_GAP_MS,
@@ -28,6 +27,8 @@ import {
   MIN_COLS,
   parseGitStatus,
   policyLines,
+  projectLimit,
+  resetText,
   resolved,
   resumed,
   ruleParts,
@@ -332,7 +333,9 @@ export const register: Register = on => {
 
     const limits = snap?.limits ?? []
     const policyRows = policy === undefined ? [] : policyLines(policy.enabled, policy.usage)
-    const other = fixedRows(limits.length, policyRows.length)
+    const projections = limits.map(l => projectLimit(l, now))
+    const usageRows = limits.length + projections.filter(p => p !== undefined).length
+    const other = fixedRows(usageRows, policyRows.length)
     const plan = headerPlan(cols, height, other, envLine(info) !== '')
     // One more row stays free for the "+N more" line.
     const { shown, hidden } = visible(rows, height - plan.rows - other - 1, AGENT_ROWS)
@@ -419,12 +422,16 @@ export const register: Register = on => {
         {blank()}
         {section('Usage')}
         {limits.length === 0 && line('  no rate limits reported', undefined, true)}
-        {limits.map(l => {
-          const reset = formatReset(l.resetsAt, now)
-          return barRow(
-            `  ${limitLabel(l.kind).padEnd(2)}  `,
-            l.percent,
-            reset === '' ? '' : `  resets ${reset}`,
+        {limits.map((l, i) => {
+          const reset = resetText(l.kind, l.resetsAt, now)
+          const lead = `  ${limitLabel(l.kind).padEnd(2)}  `
+          const projection = projections[i]
+          return (
+            <Box flexDirection="column">
+              {barRow(lead, l.percent, reset === '' ? '' : `  resets ${reset}`)}
+              {projection !== undefined &&
+                line(`${' '.repeat(lead.length)}${projection.text}`, projection.color, projection.color === undefined)}
+            </Box>
           )
         })}
         {blank()}

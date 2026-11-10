@@ -190,7 +190,10 @@ type Open = { id: string; title?: string; columns?: number }
 // The engine's answers for a session with one usage reading and one repo.
 function engine(
   on: On,
-  opts: { policy?: { enabled?: boolean; usage: Record<string, unknown> } } = {},
+  opts: {
+    policy?: { enabled?: boolean; usage: Record<string, unknown> }
+    limits?: { kind: string; percentUsed: number; resetsAt?: string }[]
+  } = {},
 ) {
   const opens: Open[] = []
   const statuses: unknown[] = []
@@ -210,7 +213,7 @@ function engine(
     value: {
       startedAt: 0,
       context: { tokens: 82000, window: 200000, percent: 41 },
-      rateLimits: [
+      rateLimits: opts.limits ?? [
         { kind: 'five_hour', percentUsed: 28 },
         { kind: 'seven_day', percentUsed: 9 },
       ],
@@ -404,5 +407,26 @@ test('at 40 columns real long agent and tool names keep duration and tokens whol
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
   expect(await ui.find({ type: 'Text', text: /^ {4}reviewer \u00b7 Sonnet \u00b7 \d+s$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^ {4}1 tool \u00b7 0 tok \u00b7 scan_secrets$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a limit with a known reset gets a projection row, within 40 columns', async ($, on) => {
+  const H = 3_600_000
+  // The clock reads 60 000 ms. The 5 hour window is 2 hours in at 60 percent.
+  engine(on, {
+    limits: [
+      { kind: 'five_hour', percentUsed: 60, resetsAt: new Date(60_000 + 3 * H).toISOString() },
+      { kind: 'seven_day', percentUsed: 10, resetsAt: new Date(60_000 + 6 * 24 * H).toISOString() },
+    ],
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: AT_40 })
+  const projection = await ui.find({ type: 'Text', text: /at this pace, full/ })
+  expect(projection).toBeDefined()
+  expect(projection?.text?.length).toBeLessThanOrEqual(40)
+  expect(await ui.find({ type: 'Text', text: /7d .*10%.* resets [A-Z][a-z]{2} \d+:\d{2}/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /5h .*60%.* resets 3h 00m/ })).toBeDefined()
   await ui.unmount()
 })

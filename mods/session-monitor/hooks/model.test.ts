@@ -19,7 +19,9 @@ import {
   headerPlan,
   friendlyModel,
   formatDuration,
+  formatClock,
   formatReset,
+  formatWeekdayTime,
   formatTokens,
   locationLine,
   META_INDENT,
@@ -27,6 +29,8 @@ import {
   order,
   parseGitStatus,
   policyLines,
+  projectLimit,
+  resetText,
   resumed,
   resolved,
   rule,
@@ -44,6 +48,7 @@ import {
   typeName,
   visible,
   WARN_AMBER,
+  WINDOW_MS,
 } from './model'
 
 const spawn = (rows: AgentRow[], key: string, now: number) =>
@@ -504,5 +509,85 @@ describe('pane layout', () => {
         opus: { tokens: 0, cache: 50 },
       }),
     ).toEqual(['on', 'sonnet  2.5k', 'haiku   400'])
+  })
+})
+
+describe('limit projection', () => {
+  const H = 3_600_000
+  const NOW = new Date(2026, 10, 9, 12, 0).getTime()
+  const seven = (elapsedH: number, percent: number) => ({
+    kind: 'seven_day',
+    percent,
+    resetsAt: NOW + WINDOW_MS.seven_day! - elapsedH * H,
+  })
+  const five = (elapsedH: number, percent: number) => ({
+    kind: 'five_hour',
+    percent,
+    resetsAt: NOW + WINDOW_MS.five_hour! - elapsedH * H,
+  })
+
+  test('hidden under 5 percent, with no reset time, with no elapsed time or with an unknown window', async () => {
+    expect(projectLimit(seven(24, 4.9), NOW)).toBeUndefined()
+    expect(projectLimit(seven(24, 5), NOW)).toBeDefined()
+    expect(projectLimit({ kind: 'seven_day', percent: 50 }, NOW)).toBeUndefined()
+    expect(projectLimit({ kind: 'seven_day', percent: 50, resetsAt: NOW + WINDOW_MS.seven_day! }, NOW)).toBeUndefined()
+    expect(projectLimit({ kind: 'spend_limit', percent: 50, resetsAt: NOW + H }, NOW)).toBeUndefined()
+  })
+
+  test('at 100 percent the limit is reached, even with no reset time', async () => {
+    expect(projectLimit({ kind: 'seven_day', percent: 100 }, NOW)).toEqual({ text: 'limit reached', color: CRIT_RED })
+    expect(projectLimit(five(1, 104), NOW)?.text).toBe('limit reached')
+  })
+
+  test('on pace when the reset comes first', async () => {
+    // Half the week gone, 40 percent used: full after 5.25 days, reset in 3.5.
+    expect(projectLimit(seven(84, 40), NOW)).toEqual({ text: 'on pace, resets first', color: undefined })
+  })
+
+  test('7 day window: amber when the limit stays full for over a day', async () => {
+    // 3 days gone, 60 percent: full in 2 days, reset in 4.
+    const p = projectLimit(seven(72, 60), NOW)
+    expect(p).toEqual({ text: `at this pace, full ${formatWeekdayTime(NOW + 48 * H)}`, color: WARN_AMBER })
+  })
+
+  test('7 day window: orange when the limit is full for under a day', async () => {
+    // 6 days gone, 90 percent: full in 16 hours, reset in 24.
+    const p = projectLimit(seven(144, 90), NOW)
+    expect(p?.color).toBe(CLAUDE_ORANGE)
+    expect(p?.text).toBe(`at this pace, full ${formatWeekdayTime(NOW + 16 * H)}`)
+  })
+
+  test('7 day window: red when it fills within 5 hours', async () => {
+    // 6 days gone, 99 percent: full in about 1.5 hours.
+    expect(projectLimit(seven(144, 99), NOW)?.color).toBe(CRIT_RED)
+  })
+
+  test('5 hour window: amber, time only on the same day', async () => {
+    // 2 hours gone, 80 percent: full in 30 minutes.
+    expect(projectLimit(five(2, 80), NOW)).toEqual({ text: 'at this pace, full 12:30', color: WARN_AMBER })
+    const late = new Date(2026, 10, 9, 23, 50).getTime()
+    const next = projectLimit(
+      { kind: 'five_hour', percent: 80, resetsAt: late + WINDOW_MS.five_hour! - 2 * H },
+      late,
+    )
+    expect(next?.text).toBe(`at this pace, full ${formatWeekdayTime(late + 30 * 60_000)}`)
+  })
+
+  test('time formats', async () => {
+    expect(formatClock(new Date(2026, 10, 9, 14, 5).getTime())).toBe('14:05')
+    expect(formatClock(new Date(2026, 10, 9, 9, 0).getTime())).toBe('9:00')
+    expect(formatWeekdayTime(new Date(2026, 10, 13, 9, 0).getTime())).toBe('Fri 9:00')
+    expect(formatWeekdayTime(new Date(2026, 10, 9, 14, 30).getTime())).toBe('Mon 14:30')
+  })
+
+  test('reset text is a weekday time for 7d and a countdown otherwise', async () => {
+    const at = new Date(2026, 10, 13, 9, 0).getTime()
+    expect(resetText('seven_day', at, NOW)).toBe('Fri 9:00')
+    expect(resetText('five_hour', NOW + (3 * 60 + 12) * 60_000, NOW)).toBe('3h 12m')
+    expect(resetText('seven_day', undefined, NOW)).toBe('')
+  })
+
+  test('projection rows count in fixedRows', async () => {
+    expect(fixedRows(4, 0)).toBe(fixedRows(2, 0) + 2)
   })
 })

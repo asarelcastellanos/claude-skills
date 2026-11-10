@@ -210,6 +210,76 @@ export const formatReset = (resetsAt: number | undefined, now: number): string =
   return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
+const HOUR_MS = 3_600_000
+
+/** Length of each rate-limit window, by the `kind` the session reports. */
+export const WINDOW_MS: Record<string, number> = {
+  five_hour: 5 * HOUR_MS,
+  seven_day: 7 * 24 * HOUR_MS,
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** Local time as `Thu 14:30` (hour unpadded, 24 hour clock). */
+export const formatWeekdayTime = (ms: number): string => {
+  const d = new Date(ms)
+  return `${WEEKDAYS[d.getDay()] ?? ''} ${formatClock(ms)}`
+}
+
+/** Local time as `14:30`. */
+export const formatClock = (ms: number): string => {
+  const d = new Date(ms)
+  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+const sameDay = (a: number, b: number): boolean => {
+  const x = new Date(a)
+  const y = new Date(b)
+  return (
+    x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate()
+  )
+}
+
+/** The text after "resets": a weekday and time for the 7 day window, a countdown for the others. */
+export const resetText = (kind: string, resetsAt: number | undefined, now: number): string =>
+  resetsAt === undefined
+    ? ''
+    : kind === 'seven_day'
+      ? formatWeekdayTime(resetsAt)
+      : formatReset(resetsAt, now)
+
+/** The least percent used before a limit gets a projection row. */
+export const PROJECT_MIN_PERCENT = 5
+
+export type Projection = { text: string; color: string | undefined }
+
+/**
+ * Where a limit is heading at the pace so far. Undefined when there is nothing
+ * to say: under PROJECT_MIN_PERCENT, an unknown reset, or no time elapsed.
+ * A `color` of undefined means dim.
+ */
+export const projectLimit = (
+  l: { kind: string; percent: number; resetsAt?: number },
+  now: number,
+): Projection | undefined => {
+  if (l.percent >= 100) return { text: 'limit reached', color: CRIT_RED }
+  const window = WINDOW_MS[l.kind]
+  if (window === undefined || l.resetsAt === undefined || l.percent < PROJECT_MIN_PERCENT) {
+    return undefined
+  }
+  const elapsed = window - (l.resetsAt - now)
+  if (elapsed <= 0) return undefined
+  const hitAt = now + ((100 - l.percent) / l.percent) * elapsed
+  if (hitAt >= l.resetsAt) return { text: 'on pace, resets first', color: undefined }
+  const when =
+    l.kind === 'five_hour' && sameDay(hitAt, now) ? formatClock(hitAt) : formatWeekdayTime(hitAt)
+  // A 5 hour window always fills within 5 hours, so "soon" only means something for the longer one.
+  const soon = window > 5 * HOUR_MS && hitAt - now < 5 * HOUR_MS
+  const long = window <= 5 * HOUR_MS || l.resetsAt - hitAt > 24 * HOUR_MS
+  const color = soon ? CRIT_RED : long ? WARN_AMBER : CLAUDE_ORANGE
+  return { text: `at this pace, full ${when}`, color }
+}
+
 const trimZero = (n: number): string => n.toFixed(1).replace(/\.0$/, '')
 
 export const formatTokens = (n: number): string => {
@@ -433,11 +503,11 @@ export const headerPlan = (
     : { kind: 'line', rows: hasEnv ? 2 : 1 }
 
 /** Rows the sections take besides the header and the agent rows: separators, titles and fixed lines. */
-export const fixedRows = (limitCount: number, policyLineCount: number): number => {
+export const fixedRows = (usageRows: number, policyLineCount: number): number => {
   const sections = [
     2,
     2,
-    1 + Math.max(1, limitCount),
+    1 + Math.max(1, usageRows),
     ...(policyLineCount > 0 ? [1 + policyLineCount] : []),
     1,
   ]
