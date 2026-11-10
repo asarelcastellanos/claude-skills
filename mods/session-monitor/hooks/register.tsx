@@ -215,7 +215,7 @@ export const register: Register = on => {
       name: 'monitor',
       description: 'Open the session monitor pane (/monitor close closes it)',
     })
-    void $.ui.open({ id: PANE, title: 'Monitor', columns: PANE_COLUMNS })
+    void $.ui.open({ id: PANE, title: 'Monitor', columns: PANE_COLUMNS, backgroundColor: 'transparent' })
     refreshLater($)
     $.clock.every(USAGE_MS, () => void refreshUsage($))
 
@@ -228,7 +228,7 @@ export const register: Register = on => {
       return { text: 'Monitor pane closed.' }
     }
     await refreshUsage($)
-    await $.ui.open({ id: PANE, title: 'Monitor', columns: PANE_COLUMNS })
+    await $.ui.open({ id: PANE, title: 'Monitor', columns: PANE_COLUMNS, backgroundColor: 'transparent' })
 
     return { text: 'Monitor pane opened.' }
   })
