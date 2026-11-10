@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { EnvInfo, UsageSnapshot } from '../types'
 
 import {
+  agentMeta,
   bar,
   CLAUDE_ORANGE,
   completed,
@@ -12,7 +13,6 @@ import {
   CRAB_WIDTH,
   denied,
   envLine,
-  familyName,
   fixedRows,
   formatDuration,
   formatReset,
@@ -434,12 +434,6 @@ export const register: Register = on => {
         {section(`Agents · ${running} running · ${rows.length} total`)}
         {rows.length === 0 && line('  none yet', undefined, true)}
         {shown.map(r => {
-          const meta = [
-            r.type,
-            familyName(r.model),
-            formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt)),
-            `${r.tools} tools`,
-          ]
           const tag =
             r.workflowIndex === undefined ? '' : ` [wf#${r.workflowIndex}]`
           return (
@@ -450,7 +444,7 @@ export const register: Register = on => {
                 </Text>
                 {truncate(`${r.description}${tag}`, cols - 4)}
               </Text>
-              {line(`    ${meta.join(' · ')}`, undefined, true)}
+              {line(`    ${agentMeta(r, now)}`, undefined, true)}
             </Box>
           )
         })}

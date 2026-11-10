@@ -269,7 +269,7 @@ test('the pane has the header and every section, and sets no status line', async
   expect(await ui.find({ type: 'Text', text: /7d .*9%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /1 running \u00b7 1 total/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Write render code/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /coder \u00b7 Sonnet \u00b7 .* \u00b7 0 tools/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /coder \u00b7 Sonnet \u00b7 .* \u00b7 0 tools \u00b7 0 tok/ })).toBeDefined()
   await ui.unmount()
 
   expect(statuses).toEqual([])

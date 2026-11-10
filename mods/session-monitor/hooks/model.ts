@@ -221,6 +221,19 @@ export const formatTokens = (n: number): string => {
   return `${trimZero(Math.round(n / 100_000) / 10)}M`
 }
 
+/** `coder · Sonnet · 1m 04s · 12 tools · 18k tok · Edit`. The last tool shows only while the agent runs. */
+export const agentMeta = (r: AgentRow, now: number): string =>
+  [
+    r.type,
+    familyName(r.model),
+    formatDuration(Math.max(0, (r.endedAt ?? now) - r.startedAt)),
+    `${r.tools} tools`,
+    `${formatTokens(r.tokens)} tok`,
+    r.status === 'running' ? r.lastTool : undefined,
+  ]
+    .filter(Boolean)
+    .join(' \u00b7 ')
+
 export type Bar = { filled: string; empty: string }
 
 /** A bar of `width` cells, split into the filled and the empty part so each takes its own color. */

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { AgentRow } from '../types'
 import {
+  agentMeta,
   bar,
   CLAUDE_ORANGE,
   completed,
@@ -340,6 +341,27 @@ describe('pane layout', () => {
     expect(symbol('failed', 0)).toBe('\u2717')
     expect(symbol('denied', 0)).toBe('\u2298')
     expect(symbol('untracked', 0)).toBe('\u00b7')
+  })
+
+  test('agentMeta shows tokens, and the last tool only while running', async () => {
+    const row: AgentRow = {
+      key: 'k',
+      description: 'd',
+      type: 'coder',
+      model: 'claude-sonnet-5-5',
+      status: 'running',
+      startedAt: 0,
+      tools: 12,
+      tokens: 18_000,
+      lastTool: 'Edit',
+    }
+    expect(agentMeta(row, 64_000)).toBe('coder \u00b7 Sonnet \u00b7 1m 04s \u00b7 12 tools \u00b7 18k tok \u00b7 Edit')
+    expect(agentMeta({ ...row, status: 'done', endedAt: 18_000 }, 64_000)).toBe(
+      'coder \u00b7 Sonnet \u00b7 18s \u00b7 12 tools \u00b7 18k tok',
+    )
+    expect(agentMeta({ ...row, lastTool: undefined }, 64_000)).toBe(
+      'coder \u00b7 Sonnet \u00b7 1m 04s \u00b7 12 tools \u00b7 18k tok',
+    )
   })
 
   test('familyName capitalizes the family', async () => {
