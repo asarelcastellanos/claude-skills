@@ -7,6 +7,9 @@ export type ModelPolicyDay = {
 
 export type ModelPolicyUsage = Record<string, { tokens: number; cache: number }>
 
+/** A model the start-of-session question offers. Also the alias /model takes. */
+export type ModelPolicyPick = 'opus' | 'sonnet' | 'haiku'
+
 declare module 'claude-code' {
 	interface PluginState {
 		'model-policy': {
@@ -18,6 +21,8 @@ declare module 'claude-code' {
 			agents: Record<string, string>
 			/** This session's tally by local date, flushed to $.store as day-<date>-<sessionId>. */
 			days: Record<string, ModelPolicyDay>
+			/** True once the start-of-session model question was shown, so a reload or a second start never asks again. */
+			asked: boolean
 		}
 	}
 }

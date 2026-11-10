@@ -12,6 +12,12 @@
 			"default": "haiku",
 			"options": ["haiku", "sonnet"]
 		},
+		"askModelAtStart": {
+			"type": "boolean",
+			"title": "Ask which model to use at session start",
+			"description": "Ask for Opus, Sonnet or Haiku when a new session starts. The pick becomes the main model. Haiku also runs every agent on Haiku.",
+			"default": true
+		},
 		"workflowConfirmAtPercent": {
 			"type": "number",
 			"title": "Confirm workflows at 5-hour percent",

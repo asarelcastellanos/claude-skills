@@ -1,6 +1,6 @@
 // Pure decision helpers for the model-policy mod. No engine calls here, so tests call them directly.
 
-import type { ModelPolicyDay } from '../types'
+import type { ModelPolicyDay, ModelPolicyPick } from '../types'
 
 export const WORKER_MODEL = 'sonnet'
 
@@ -32,6 +32,8 @@ export type SpawnInput = {
 export type SpawnContext = {
 	/** Model for model-policy:mechanic: "haiku" or "sonnet". */
 	mechanicModel: string
+	/** The family of the main session's model right now. Unset when it could not be read. */
+	mainFamily?: Family
 }
 
 export const DEFAULT_CONTEXT: SpawnContext = { mechanicModel: 'haiku' }
@@ -45,6 +47,20 @@ export function fiveHourPercent(limits: ReadonlyArray<{ kind: string; percentUse
 	return limits.find(limit => limit.kind === 'five_hour')?.percentUsed
 }
 
+// The start-of-session question's labels, each with the alias /model takes.
+const PICKS = new Map<string, ModelPolicyPick>([
+	['Opus', 'opus'],
+	['Sonnet', 'sonnet'],
+	['Haiku', 'haiku'],
+])
+
+export const PICK_LABELS: readonly string[] = [...PICKS.keys()]
+
+/** Maps the dialog's answer to a pick. Text typed under "Other" matches no label, so it is no pick. */
+export function pickFromAnswer(answer: string): ModelPolicyPick | undefined {
+	return PICKS.get(answer)
+}
+
 /** Opus runs only in the main session. Subagents get Sonnet at most, Haiku for cheap types. */
 export function decideSpawn(spawn: SpawnInput, ctx: SpawnContext = DEFAULT_CONTEXT): SpawnDecision {
 	// A resume can only be refused, and a rewrite is logged as a failure. Leave it alone.
@@ -53,11 +69,13 @@ export function decideSpawn(spawn: SpawnInput, ctx: SpawnContext = DEFAULT_CONTE
 	if (spawn.fork) {
 		return {
 			deny:
-				'Model policy: forks run on the main session model (Opus), and only the main session runs on Opus. ' +
+				'Model policy: a fork inherits the main session model, which may be Opus, and only the main session runs on Opus. ' +
 				'Spawn a model-policy:coder, scout, mechanic, or reviewer agent with a self-contained prompt instead.',
 		}
 	}
 	if (family(spawn.model) === 'haiku') return { model: spawn.model ?? 'haiku' }
+	// A main session on Haiku means the person wants the cheapest run, so no agent goes above it.
+	if (ctx.mainFamily === 'haiku') return { model: 'haiku' }
 	const type = spawn.subagentType ?? ''
 	const cheap = HAIKU_TYPES.has(type) || type === 'model-policy:mechanic'
 	if (cheap && family(spawn.model) === 'sonnet') return { model: spawn.model ?? 'sonnet' }
