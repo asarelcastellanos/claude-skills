@@ -23,7 +23,11 @@ Restate the request in one or two sentences. Read the repo's CLAUDE.md, REVIEW.m
 
 Send questions about the code to `model-policy:scout` or `Explore`: where something is handled, who calls a function, whether the tests pass today. Read the key files yourself only when you need them to decide the approach.
 
-Ask the user a question only if a wrong guess would be expensive to undo. Otherwise pick the most reasonable reading, state it, and continue.
+The vaguer the request, the more questions you ask:
+
+- A clear request, with a known goal, scope, and result: ask at most one question. State your reading and continue.
+- A vague request: ask until you can name the goal, what is in and out of scope, and the checks that will prove it's done. Ask in rounds of a few questions with AskUserQuestion, and offer options where you can.
+- Never plan around a guess about what the user wants. Write each answer into the issue it affects.
 
 ### When the user reports a failure
 
