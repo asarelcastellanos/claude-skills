@@ -41,6 +41,21 @@ fi
 # The marketplace is this repo's folder, so edits to a mod apply after /reload-plugins.
 # Each folder under mods/ is named after its plugin, so the folder name is the install name.
 if command -v claude >/dev/null 2>&1; then
+	# The marketplace was named asarel-claude-skills before the rename. Leaving it registered makes
+	# "marketplace add" a no-op for the same folder, and every mod would load under both names.
+	old_marketplace="asarel-claude-skills"
+	if claude plugin marketplace list --json | grep -qF "\"name\": \"$old_marketplace\""; then
+		installed="$(claude plugin list --json)"
+		for mod in "$repo"/mods/*/; do
+			name="$(basename "$mod")"
+			if grep -qF "\"id\": \"$name@$old_marketplace\"" <<<"$installed"; then
+				claude plugin uninstall "$name@$old_marketplace" --scope user >/dev/null
+				echo "removed $name@$old_marketplace"
+			fi
+		done
+		claude plugin marketplace remove "$old_marketplace" >/dev/null
+		echo "removed the $old_marketplace marketplace"
+	fi
 	claude plugin marketplace add "$repo" --scope user >/dev/null
 	for mod in "$repo"/mods/*/; do
 		name="$(basename "$mod")"
