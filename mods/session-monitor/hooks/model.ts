@@ -1,4 +1,4 @@
-import type { AgentRow, EnvInfo, UsageSnapshot } from '../types'
+import type { AgentRow, AgentStatus, EnvInfo } from '../types'
 
 /** Rows kept in state. Running rows are never dropped. */
 export const MAX_KEPT = 30
@@ -185,6 +185,12 @@ export const family = (model: string | undefined): string => {
   return m.length > 10 ? m.slice(0, 10) : m
 }
 
+/** Display name of a model family: "opus" becomes "Opus". */
+export const familyName = (model: string | undefined): string => {
+  const f = family(model)
+  return `${f.slice(0, 1).toUpperCase()}${f.slice(1)}`
+}
+
 export const formatDuration = (ms: number): string => {
   const s = Math.max(0, Math.floor(ms / 1000))
   if (s < 60) return `${s}s`
@@ -204,20 +210,25 @@ export const formatReset = (resetsAt: number | undefined, now: number): string =
   return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
+const trimZero = (n: number): string => n.toFixed(1).replace(/\.0$/, '')
+
 export const formatTokens = (n: number): string => {
   if (n < 1000) return String(n)
   if (n < 1_000_000) {
     const k = Math.round(n / 100) / 10
-    return k >= 1000 ? '1.0M' : `${k.toFixed(1)}k`
+    return k >= 1000 ? '1M' : `${trimZero(k)}k`
   }
-  return `${(Math.round(n / 100_000) / 10).toFixed(1)}M`
+  return `${trimZero(Math.round(n / 100_000) / 10)}M`
 }
 
-export const bar = (percent: number, width: number): string => {
+export type Bar = { filled: string; empty: string }
+
+/** A bar of `width` cells, split into the filled and the empty part so each takes its own color. */
+export const bar = (percent: number, width: number): Bar => {
   const w = Math.max(0, Math.floor(width))
   const clamped = Math.min(100, Math.max(0, percent))
   const filled = Math.round((clamped / 100) * w)
-  return '#'.repeat(filled) + '-'.repeat(w - filled)
+  return { filled: '\u25b0'.repeat(filled), empty: '\u25b1'.repeat(w - filled) }
 }
 
 export const severity = (percent: number | undefined): Severity =>
@@ -234,8 +245,6 @@ export const truncate = (text: string, width: number): string =>
 
 export const limitLabel = (kind: string): string =>
   kind === 'five_hour' ? '5h' : kind === 'seven_day' ? '7d' : kind.replace(/_/g, ' ')
-
-const pct = (n: number): string => `${Math.round(n)}%`
 
 export type GitInfo = { branch: string; dirty: boolean }
 
@@ -302,25 +311,108 @@ export const envLine = (env: EnvInfo | null | undefined): string => {
   return parts.join(' \u00b7 ')
 }
 
-/** The compact line for `$.ui.status`. */
-export const statusLine = (u: UsageSnapshot, env?: EnvInfo | null): string => {
+/** `<folder> \u00b7 <branch><*>`, leaving out what is unknown. */
+export const locationLine = (env: EnvInfo | null | undefined): string => {
+  if (env === null || env === undefined) return ''
   const parts: string[] = []
-  const head = envLine(env)
-  if (head !== '') parts.push(head)
-  for (const l of u.limits) parts.push(`${limitLabel(l.kind)} ${pct(l.percent)}`)
-  if (u.contextPercent !== undefined) parts.push(`ctx ${pct(u.contextPercent)}`)
+  if (env.folder) parts.push(env.folder)
+  if (env.branch) parts.push(`${env.branch}${env.dirty ? '*' : ''}`)
   return parts.join(' \u00b7 ')
 }
 
-export const symbol = (s: AgentRow['status']): string =>
+export const CLAUDE_ORANGE = '#D97757'
+export const WARN_AMBER = '#E5A82E'
+export const CRIT_RED = '#E5534B'
+export const DONE_GREEN = '#6CC070'
+
+export const severityColor = (s: Severity): string =>
+  s === 'crit' ? CRIT_RED : s === 'warn' ? WARN_AMBER : CLAUDE_ORANGE
+
+/** Undefined means the default text color, which the pane dims for an untracked row. */
+export const STATUS_COLOR: Record<AgentStatus, string | undefined> = {
+  running: CLAUDE_ORANGE,
+  done: DONE_GREEN,
+  failed: CRIT_RED,
+  denied: WARN_AMBER,
+  untracked: undefined,
+}
+
+/** The Claude spinner glyphs. A running agent shows one, picked by the 1 s tick. */
+export const SPINNER = ['\u00b7', '\u2722', '\u2733', '\u2736', '\u273b', '\u273d'] as const
+export const SPINNER_MS = 1000
+
+export const spinnerFrame = (now: number): string =>
+  SPINNER[Math.floor(Math.max(0, now) / SPINNER_MS) % SPINNER.length] ?? SPINNER[0]
+
+export const symbol = (s: AgentStatus, now: number): string =>
   s === 'running'
-    ? '>'
+    ? spinnerFrame(now)
     : s === 'done'
-      ? '+'
+      ? '\u2713'
       : s === 'failed'
-        ? 'x'
-        : s === 'untracked'
-          ? '?'
-          : '!'
+        ? '\u2717'
+        : s === 'denied'
+          ? '\u2298'
+          : '\u00b7'
 
 export const statusWord = (s: AgentRow['status']): string => s
+
+/** The pixel crab beside the title. Each row is padded to CRAB_WIDTH when drawn. */
+export const CRAB = [' ▐▛███▜▌', '▝▜█████▛▘', '  ▘▘ ▝▝'] as const
+export const CRAB_WIDTH = 9
+export const CRAB_GAP = 2
+export const CRAB_MIN_COLS = 28
+
+export type HeaderPlan = { kind: 'crab'; rows: number } | { kind: 'line'; rows: number }
+
+/**
+ * The crab header needs CRAB_MIN_COLS columns and room for the three crab rows
+ * plus every other fixed row. Otherwise the header is a title line and, when the
+ * environment is known, a folder, branch and model line.
+ */
+export const headerPlan = (
+  cols: number,
+  height: number,
+  otherRows: number,
+  hasEnv: boolean,
+): HeaderPlan =>
+  cols >= CRAB_MIN_COLS && height >= CRAB.length + otherRows
+    ? { kind: 'crab', rows: CRAB.length }
+    : { kind: 'line', rows: hasEnv ? 2 : 1 }
+
+/** Rows the sections take besides the header and the agent rows: separators, titles and fixed lines. */
+export const fixedRows = (limitCount: number, hasPolicy: boolean): number => {
+  const sections = [2, 2, 1 + Math.max(1, limitCount), ...(hasPolicy ? [2] : []), 1]
+  // One blank row after the header, one between each pair of sections.
+  return 1 + sections.reduce((a, b) => a + b, 0) + (sections.length - 1)
+}
+
+export type RuleParts = { lead: string; title: string; tail: string }
+
+/** A section rule `\u2500\u2500 Title \u2500\u2500\u2500...` as three parts, so the title can take its own color. */
+export const ruleParts = (title: string, width: number): RuleParts => {
+  const lead = '\u2500\u2500 '
+  const shown = truncate(title, Math.max(0, width - lead.length - 1))
+  const left = Math.max(0, width - lead.length - shown.length)
+  const tail = left === 0 ? '' : ` ${'\u2500'.repeat(left - 1)}`
+  return { lead, title: shown, tail }
+}
+
+/** The rule as one string, exactly `width` characters. */
+export const rule = (title: string, width: number): string => {
+  const p = ruleParts(title, width)
+  return `${p.lead}${p.title}${p.tail}`.slice(0, Math.max(0, width))
+}
+
+export type PolicyUsage = Record<string, { tokens: number; cache: number }>
+
+const POLICY_FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'other'] as const
+
+/** `on \u00b7 opus 7k`: the switch, then each model family that has tokens. */
+export const policyLine = (enabled: boolean, usage: PolicyUsage): string =>
+  [
+    enabled ? 'on' : 'off',
+    ...POLICY_FAMILIES.filter(f => (usage[f]?.tokens ?? 0) > 0).map(
+      f => `${f} ${formatTokens(usage[f]?.tokens ?? 0)}`,
+    ),
+  ].join(' \u00b7 ')

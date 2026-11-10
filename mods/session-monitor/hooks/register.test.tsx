@@ -1,3 +1,4 @@
+import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
 const PANE = {
@@ -28,7 +29,6 @@ test('the pane shows an agent, usage and context, on every surface', async ($, o
   }))
   on('agent.spawn', () => ({ model: 'claude-opus-4', agentId: 'a1' }))
   on('tool.call', () => ({ result: {} }))
-  on('ui.status', () => ({ value: undefined }))
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', () => ({
@@ -63,9 +63,8 @@ test('the pane shows an agent, usage and context, on every surface', async ($, o
     expect(await ui.find({ type: 'Text', text: /scan the repo/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5h/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /38%/ })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /repo/ }))?.text).toBe(
-      'repo \u00b7 main* \u00b7 Opus 5.5',
-    )
+    expect(await ui.find({ type: 'Text', text: /repo \u00b7 main\*/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Opus 5\.5/ })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -83,7 +82,6 @@ test('/clear empties the agent list', async ($, on) => {
     },
   }))
   on('agent.spawn', () => ({ model: 'claude-opus-4', agentId: 'a1' }))
-  on('ui.status', () => ({ value: undefined }))
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', () => ({
@@ -129,7 +127,6 @@ test('a resumed session empties the agent list', async ($, on) => {
     },
   }))
   on('agent.spawn', () => ({ model: 'claude-opus-4', agentId: 'a1' }))
-  on('ui.status', () => ({ value: undefined }))
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', () => ({
@@ -169,7 +166,6 @@ test('an answered spawn with no agent id is not left running', async ($, on) => 
     value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] },
   }))
   on('agent.spawn', () => ({ model: 'claude-opus-5-5' }))
-  on('ui.status', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 60_000 }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.after', () => ({ value: undefined }))
@@ -184,7 +180,154 @@ test('an answered spawn with no agent id is not left running', async ($, on) => 
   } as never)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /0 running, 1 total/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /untracked/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /0 running \u00b7 1 total/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /remote job/ })).toBeDefined()
+  await ui.unmount()
+})
+
+type Open = { id: string; title?: string; columns?: number }
+
+// The engine's answers for a session with one usage reading and one repo.
+function engine(
+  on: On,
+  opts: { policy?: { enabled?: boolean; usage: Record<string, unknown> } } = {},
+) {
+  const opens: Open[] = []
+  const statuses: unknown[] = []
+  on('command.register', () => ({ value: { command: 'monitor' } }))
+  on('ui.open', (_, e) => {
+    opens.push(e as Open)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.status', (_, e) => {
+    statuses.push(e)
+    return { value: undefined }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: { tokens: 82000, window: 200000, percent: 41 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: 28 },
+        { kind: 'seven_day', percentUsed: 9 },
+      ],
+      cost: { usd: 1.42 },
+    },
+  }))
+  on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'a1' }))
+  on('session.cwd', () => ({ value: '/work/claude-skills' }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('process.run', () => ({
+    value: {
+      exitCode: 0,
+      stdout: '# branch.oid abc1234\n# branch.head main\n? x\n',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  on('clock.now', () => ({ value: 60_000 }))
+  on('clock.every', () => ({ value: undefined }))
+  on('clock.after', () => ({ value: undefined }))
+  on('ui.panes', () => ({ value: [] }))
+  const policy = opts.policy
+  if (policy !== undefined) {
+    on('state.get', { plugin: 'model-policy' }, (_, e) => ({
+      value:
+        e.key === 'usage'
+          ? { value: policy.usage, version: 3 }
+          : { value: policy.enabled, version: policy.enabled === undefined ? 0 : 1 },
+    }))
+  }
+  return { opens, statuses }
+}
+
+const SPAWN = {
+  prompt: 'p',
+  description: 'Write render code',
+  subagentType: 'coder',
+  background: false,
+  fork: false,
+} as never
+
+test('the pane has the header and every section, and sets no status line', async ($, on) => {
+  const { opens, statuses } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn(SPAWN)
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Claude Monitor/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /claude-skills \u00b7 main\*/ })).toBeDefined()
+  for (const title of ['Session', 'Context', 'Usage', 'Agents']) {
+    expect(await ui.find({ type: 'Text', text: new RegExp(`\u2500\u2500 ${title}`) })).toBeDefined()
+  }
+  expect(await ui.find({ type: 'Text', text: /\$1\.42/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /41%.*82k \/ 200k/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /5h.*28%.*7d|5h .*28%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /7d .*9%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1 running \u00b7 1 total/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Write render code/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /coder \u00b7 Sonnet \u00b7 .* \u00b7 0 tools/ })).toBeDefined()
+  await ui.unmount()
+
+  expect(statuses).toEqual([])
+  expect(opens.length).toBeGreaterThan(0)
+})
+
+test('the pane opens with a dock width request of 40 columns', async ($, on) => {
+  const { opens } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  expect(opens.length).toBe(2)
+  for (const o of opens) {
+    expect(o.id).toBe('monitor')
+    expect(o.columns).toBe(40)
+  }
+})
+
+test('a narrow pane falls back to a one-line header', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 27 } })
+  expect(await ui.find({ type: 'Text', text: /Claude Monitor/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\u259d\u259c/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^claude-skills \u00b7 main\* \u00b7/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the Policy section shows when model-policy has written its state', async ($, on) => {
+  engine(on, { policy: { usage: { opus: { tokens: 7000, cache: 0 } } } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /\u2500\u2500 Policy/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /on \u00b7 opus 7k/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the Policy section reads off when model-policy is switched off', async ($, on) => {
+  engine(on, { policy: { enabled: false, usage: {} } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^ {2}off$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('without model-policy the pane has no Policy section', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'monitor', args: '' } as never)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /\u2500\u2500 Usage/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Policy/ })).toBeUndefined()
   await ui.unmount()
 })

@@ -3,26 +3,41 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { AgentRow } from '../types'
 import {
   bar,
+  CLAUDE_ORANGE,
   completed,
+  CRAB,
+  CRAB_MIN_COLS,
+  CRIT_RED,
   denied,
   envLine,
   family,
+  familyName,
+  fixedRows,
   hasRunning,
+  headerPlan,
   friendlyModel,
   formatDuration,
   formatReset,
   formatTokens,
+  locationLine,
   order,
   parseGitStatus,
+  policyLine,
   resumed,
   resolved,
+  rule,
+  ruleParts,
   severity,
+  severityColor,
   spawned,
-  statusLine,
+  SPINNER,
+  spinnerFrame,
+  symbol,
   toolCalled,
   trim,
   truncate,
   visible,
+  WARN_AMBER,
 } from './model'
 
 const spawn = (rows: AgentRow[], key: string, now: number) =>
@@ -190,15 +205,26 @@ describe('formatting', () => {
   test('formatTokens', async () => {
     expect(formatTokens(999)).toBe('999')
     expect(formatTokens(12_345)).toBe('12.3k')
+    expect(formatTokens(82_000)).toBe('82k')
+    expect(formatTokens(200_000)).toBe('200k')
     expect(formatTokens(1_200_000)).toBe('1.2M')
+    expect(formatTokens(2_000_000)).toBe('2M')
   })
 
-  test('bar', async () => {
-    expect(bar(0, 10)).toBe('----------')
-    expect(bar(50, 10)).toBe('#####-----')
-    expect(bar(100, 4)).toBe('####')
-    expect(bar(250, 4)).toBe('####')
-    expect(bar(-3, 4)).toBe('----')
+  test('bar splits filled and empty cells', async () => {
+    expect(bar(0, 10)).toEqual({ filled: '', empty: '\u25b1'.repeat(10) })
+    expect(bar(50, 10)).toEqual({ filled: '\u25b0'.repeat(5), empty: '\u25b1'.repeat(5) })
+    expect(bar(100, 4)).toEqual({ filled: '\u25b0'.repeat(4), empty: '' })
+    expect(bar(250, 4)).toEqual({ filled: '\u25b0'.repeat(4), empty: '' })
+    expect(bar(-3, 4)).toEqual({ filled: '', empty: '\u25b1'.repeat(4) })
+  })
+
+  test('bar and percent color follow severity', async () => {
+    expect(severityColor(severity(10))).toBe(CLAUDE_ORANGE)
+    expect(severityColor(severity(70))).toBe(WARN_AMBER)
+    expect(severityColor(severity(89))).toBe(WARN_AMBER)
+    expect(severityColor(severity(90))).toBe(CRIT_RED)
+    expect(severityColor(severity(undefined))).toBe(CLAUDE_ORANGE)
   })
 
   test('severity thresholds', async () => {
@@ -213,20 +239,6 @@ describe('formatting', () => {
     expect(truncate('abcdef', 6)).toBe('abcdef')
     expect(truncate('abcdef', 4)).toBe('abc~')
     expect(truncate('abc', 0)).toBe('')
-  })
-
-  test('statusLine', async () => {
-    expect(
-      statusLine({
-        startedAt: 0,
-        contextWindow: 200000,
-        contextPercent: 38.2,
-        limits: [
-          { kind: 'five_hour', percent: 23.4 },
-          { kind: 'seven_day', percent: 41 },
-        ],
-      }),
-    ).toBe('5h 23% · 7d 41% · ctx 38%')
   })
 })
 
@@ -285,36 +297,112 @@ describe('friendlyModel', () => {
   })
 })
 
-describe('status line with environment', () => {
-  const usage = {
-    startedAt: 0,
-    contextWindow: 1,
-    contextPercent: 38,
-    limits: [{ kind: 'five_hour', percent: 23 }, { kind: 'seven_day', percent: 41 }],
-  }
+describe('environment lines', () => {
   const env = { folder: 'repo', branch: 'main', dirty: true, model: 'Opus 5.5', gitAt: 0 }
 
-  test('every segment', async () => {
-    expect(statusLine(usage, env)).toBe(
-      'repo \u00b7 main* \u00b7 Opus 5.5 \u00b7 5h 23% \u00b7 7d 41% \u00b7 ctx 38%',
-    )
+  test('envLine has every segment', async () => {
+    expect(envLine(env)).toBe('repo \u00b7 main* \u00b7 Opus 5.5')
   })
 
   test('clean branch has no star, no repo drops the branch', async () => {
-    expect(statusLine(usage, { ...env, dirty: false })).toContain('repo \u00b7 main \u00b7 Opus')
-    expect(statusLine(usage, { ...env, branch: undefined })).toBe(
-      'repo \u00b7 Opus 5.5 \u00b7 5h 23% \u00b7 7d 41% \u00b7 ctx 38%',
-    )
+    expect(envLine({ ...env, dirty: false })).toBe('repo \u00b7 main \u00b7 Opus 5.5')
+    expect(envLine({ ...env, branch: undefined })).toBe('repo \u00b7 Opus 5.5')
   })
 
   test('each of folder and model can be missing', async () => {
-    expect(statusLine(usage, { ...env, folder: undefined })).toMatch(/^main\* \u00b7 Opus 5.5/)
-    expect(statusLine(usage, { ...env, model: undefined })).toMatch(/^repo \u00b7 main\* \u00b7 5h/)
+    expect(envLine({ ...env, folder: undefined })).toBe('main* \u00b7 Opus 5.5')
+    expect(envLine({ ...env, model: undefined })).toBe('repo \u00b7 main*')
     expect(envLine({ dirty: false, gitAt: 0 })).toBe('')
     expect(envLine(null)).toBe('')
   })
 
-  test('no usage segments and no env gives an empty line', async () => {
-    expect(statusLine({ ...usage, limits: [], contextPercent: undefined })).toBe('')
+  test('locationLine leaves the model out', async () => {
+    expect(locationLine(env)).toBe('repo \u00b7 main*')
+    expect(locationLine({ ...env, folder: undefined, branch: undefined })).toBe('')
+    expect(locationLine(null)).toBe('')
+  })
+})
+
+describe('pane layout', () => {
+  test('spinnerFrame picks a glyph by the second', async () => {
+    expect(SPINNER.join(' ')).toBe('\u00b7 \u2722 \u2733 \u2736 \u273b \u273d')
+    expect(spinnerFrame(0)).toBe('\u00b7')
+    expect(spinnerFrame(999)).toBe('\u00b7')
+    expect(spinnerFrame(1000)).toBe('\u2722')
+    expect(spinnerFrame(5000)).toBe('\u273d')
+    expect(spinnerFrame(6000)).toBe('\u00b7')
+    expect(spinnerFrame(61_500)).toBe('\u2722')
+  })
+
+  test('status symbols', async () => {
+    expect(symbol('running', 2000)).toBe('\u2733')
+    expect(symbol('done', 0)).toBe('\u2713')
+    expect(symbol('failed', 0)).toBe('\u2717')
+    expect(symbol('denied', 0)).toBe('\u2298')
+    expect(symbol('untracked', 0)).toBe('\u00b7')
+  })
+
+  test('familyName capitalizes the family', async () => {
+    expect(familyName('claude-sonnet-5-5')).toBe('Sonnet')
+    expect(familyName(undefined)).toBe('?')
+  })
+
+  test('the crab rows are the three pixel rows', async () => {
+    expect([...CRAB]).toEqual([' \u2590\u259b\u2588\u2588\u2588\u259c\u258c', '\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598', '  \u2598\u2598 \u259d\u259d'])
+  })
+
+  test('header is the crab when wide and tall enough', async () => {
+    const other = fixedRows(2, false)
+    expect(headerPlan(40, 40, other, true)).toEqual({ kind: 'crab', rows: 3 })
+    expect(headerPlan(CRAB_MIN_COLS, 40, other, true).kind).toBe('crab')
+    expect(headerPlan(40, CRAB.length + other, other, true).kind).toBe('crab')
+  })
+
+  test('header falls back to a line when narrow or short', async () => {
+    const other = fixedRows(2, false)
+    expect(headerPlan(CRAB_MIN_COLS - 1, 40, other, true)).toEqual({ kind: 'line', rows: 2 })
+    expect(headerPlan(40, CRAB.length + other - 1, other, true)).toEqual({ kind: 'line', rows: 2 })
+    expect(headerPlan(20, 40, other, false)).toEqual({ kind: 'line', rows: 1 })
+  })
+
+  test('fixedRows counts separators, titles and fixed lines', async () => {
+    // blank after header, Session 2, Context 2, Usage 1 + 2, Agents 1, three blanks between.
+    expect(fixedRows(2, false)).toBe(1 + 2 + 2 + 3 + 1 + 3)
+    // No limits still reserve one line for "no rate limits reported".
+    expect(fixedRows(0, false)).toBe(fixedRows(1, false))
+    // Policy adds its rule, its line and one more blank.
+    expect(fixedRows(2, true)).toBe(fixedRows(2, false) + 3)
+  })
+
+  test('rule fills the width exactly', async () => {
+    expect(rule('Session', 20)).toBe('\u2500\u2500 Session \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500')
+    for (const width of [10, 11, 28, 40, 80]) {
+      expect(rule('Session', width).length).toBe(width)
+      expect(rule('Agents \u00b7 1 running \u00b7 3 total', width).length).toBe(width)
+    }
+  })
+
+  test('rule shortens a title that does not fit', async () => {
+    const r = rule('A very long section title', 12)
+    expect(r.length).toBe(12)
+    expect(r.startsWith('\u2500\u2500 ')).toBe(true)
+  })
+
+  test('ruleParts joins to the rule', async () => {
+    const p = ruleParts('Usage', 30)
+    expect(p.title).toBe('Usage')
+    expect(`${p.lead}${p.title}${p.tail}`).toBe(rule('Usage', 30))
+  })
+
+  test('policyLine lists on or off, then the families with tokens', async () => {
+    expect(policyLine(true, { opus: { tokens: 7000, cache: 0 } })).toBe('on \u00b7 opus 7k')
+    expect(policyLine(false, {})).toBe('off')
+    expect(
+      policyLine(true, {
+        haiku: { tokens: 400, cache: 9 },
+        sonnet: { tokens: 2500, cache: 0 },
+        opus: { tokens: 0, cache: 50 },
+      }),
+    ).toBe('on \u00b7 sonnet 2.5k \u00b7 haiku 400')
   })
 })

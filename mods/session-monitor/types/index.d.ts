@@ -40,6 +40,12 @@ export type EnvInfo = {
   gitAt: number
 }
 
+/**
+ * The two session values of the model-policy mod that the Policy section reads.
+ * The declaration is local on purpose: listing model-policy under `dependencies`
+ * would make this mod need it, and the pane works without it. The full contract
+ * is mods/model-policy/types/index.d.ts.
+ */
 declare module 'claude-code' {
   interface PluginState {
     'session-monitor': {
@@ -47,6 +53,12 @@ declare module 'claude-code' {
       usage: Shaped<UsageSnapshot | null>
       now: number
       env: Shaped<EnvInfo | null>
+    }
+    'model-policy': {
+      /** False after `/model-policy off`. Unset means on. */
+      enabled: boolean
+      /** Per model family: input + output tokens, and cache read + creation tokens. */
+      usage: Record<string, { tokens: number; cache: number }>
     }
   }
 }
