@@ -1,8 +1,26 @@
-# claude-skills
+# claude-workbench
 
-These are the skills and global instructions I run in [Claude Code](https://claude.com/claude-code). With them, Claude writes plain English, keeps git history readable, writes strict TypeScript, and builds web UI that looks designed rather than generated.
+This is my whole [Claude Code](https://claude.com/claude-code) setup in one repo. It has three parts:
 
-A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task matches its description, or when you type `/skill-name`. This repo keeps mine in one place, so every machine I use gets the same behavior, and anyone can borrow the ones they like.
+- **Skills** make Claude write plain English, keep git history readable, write strict TypeScript, and build web UI that looks designed rather than generated.
+- **Mods** change how Claude Code itself runs. They pick the model for each agent, show a live session monitor beside the chat, and suggest `/clear` when a prompt starts a new task.
+- **A shipping process** carries a code change from request to merged PR. GitHub issues track the work, each issue lists the checks that prove it's done, and I approve the plan and the PR.
+
+A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task matches its description, or when you type `/skill-name`. A mod is a plugin of function hooks. Keeping both in one repo gives every machine I use the same behavior, and anyone can borrow the parts they like.
+
+## How a change ships
+
+`ship-a-change` runs the process for any change worth a plan and a review. Small, clear changes skip the plan and the review, and Claude says so in one line. They still go through a PR I approve, and a reported failure still gets an issue first.
+
+1. Understand the task. The vaguer the request, the more questions Claude asks before planning. When I report a failure, Claude first opens an issue, tries to reproduce it, and records the result on the issue. A large or vague task is split into checkpoints. Claude offers three styles, such as versions, vertical slices or phases, and versions continue from the project's current version. Each checkpoint is a GitHub milestone, and a project board shows them all.
+2. Write one GitHub issue per piece of work, each with a "Done when" list of checks. The plan names the checks for every issue, and I approve it.
+3. Agents build the change on a branch. Opus supervises, Sonnet writes code, Haiku does lookups.
+4. Run the project's checks and every issue's "Done when" checks.
+5. Review the full diff once, just before the PR to main.
+6. Fix the findings and run the checks again.
+7. Record mistakes worth remembering in the repo's `LESSONS.md`. This is the only step that writes lessons.
+8. Open the PR, which closes its issues. I approve the merge.
+9. Delete the branch. When a checkpoint is complete, close its milestone, and tag the version if the checkpoints are versions.
 
 ## What's inside
 
@@ -18,10 +36,10 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 
 | Skill | What it does |
 |---|---|
-| `ship-a-change` | Carries one code change from request to merged PR in nine steps. You approve the plan and the final PR. Agents do the work, the main session supervises, and lessons go into the project's `LESSONS.md`. |
-| `verify-before-pr` | Runs the real checks, uses the change the way a user would, gets a fresh-context review, and sets the risk tier for the PR description. |
-| `pr-review` | Reviews a diff for real bugs. Finder agents each take one lens, separate agents verify each finding, and re-reviews stop after three rounds. |
-| `address-review-findings` | Gives every review finding an outcome, fixes each mistake everywhere it appears, and escalates to the user after three rounds. |
+| `ship-a-change` | Carries one code change from request to merged PR in nine steps, described above. You approve the plan and the final PR. |
+| `verify-before-pr` | Runs the real checks and each issue's "Done when" checks, uses the change the way a user would, and writes the PR description with its risk tier. |
+| `pr-review` | Reviews a diff for real bugs, once per PR. Finder agents each take one lens, and separate agents verify each finding. |
+| `address-review-findings` | Gives every review finding an outcome, fixes each mistake everywhere it appears, and runs the checks again. |
 
 ### Code
 
@@ -66,13 +84,13 @@ Here is the `web-ui` example dashboard. The React, Vue, and HTML versions all re
 Clone the repo anywhere, then run the install script:
 
 ```bash
-git clone https://github.com/asarelcastellanos/claude-skills.git ~/claude-skills
+git clone https://github.com/asarelcastellanos/claude-workbench.git ~/claude-workbench
 ```
 
 | OS | Command |
 |---|---|
-| Windows (PowerShell) | `~/claude-skills/install.ps1` |
-| macOS or Linux | `bash ~/claude-skills/install.sh` |
+| Windows (PowerShell) | `~/claude-workbench/install.ps1` |
+| macOS or Linux | `bash ~/claude-workbench/install.sh` |
 
 The script links each folder in `skills/` into `~/.claude/skills/`. On Windows it uses directory junctions, which need no admin rights. It also adds one import line to `~/.claude/CLAUDE.md` that points at this repo's `CLAUDE.md`. If you already have a skill with the same name, the script moves it to `~/.claude/skills-backup-<timestamp>/` first. If the `claude` CLI is installed, the script also adds this repo as a plugin marketplace and installs every mod in `mods/`. Claude Code reads the mods from this folder, so after a `git pull` or an edit, run `/reload-plugins` in a session. Running the script again is safe.
 
@@ -83,7 +101,7 @@ The skills are links, not copies, so `git pull` updates them. You don't need to 
 From a terminal session, install one mod by name:
 
 ```
-/plugin install session-monitor --marketplace asarelcastellanos/claude-skills
+/plugin install session-monitor --marketplace asarelcastellanos/claude-workbench
 ```
 
 ### Install only some skills
@@ -96,7 +114,7 @@ Most skills stand alone. These depend on others:
 - `typescript-best-practices` and `principle-boundary-discipline` refer to `principle-type-system-discipline`, and it refers to `principle-encode-lessons-in-structure`.
 - `web-ui` applies `typescript-best-practices` and `principle-boundary-discipline` to the code it writes.
 - `web-ui` works best with `heroui-react` for React projects.
-- `model-roles` needs the `model-policy` mod. The three mods work alone or together. `pr-review` and `verify-before-pr` use its `model-policy:reviewer` agent.
+- `model-roles` needs the `model-policy` mod. The three mods work alone or together. `pr-review` uses its `model-policy:reviewer` agent.
 - `ship-a-change` runs `verify-before-pr`, `pr-review` and `address-review-findings`. `verify-before-pr` writes the PR description with `git-messages`.
 
 ## Make it yours

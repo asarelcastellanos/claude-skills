@@ -34,10 +34,30 @@ if ($existing -notmatch [regex]::Escape($importLine)) {
 # The marketplace is this repo's folder, so edits to a mod apply after /reload-plugins.
 # Each folder under mods/ is named after its plugin, so the folder name is the install name.
 if (Get-Command claude -ErrorAction SilentlyContinue) {
+	# The marketplace was named asarel-claude-skills before the rename. Leaving it registered makes
+	# "marketplace add" a no-op for the same folder, and every mod would load under both names.
+	$oldMarketplace = "asarel-claude-skills"
+	$marketplaces = (claude plugin marketplace list --json) -join "`n"
+	if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+	if (($marketplaces | ConvertFrom-Json).name -contains $oldMarketplace) {
+		$installed = (claude plugin list --json) -join "`n"
+		if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+		$installedIds = ($installed | ConvertFrom-Json).id
+		foreach ($mod in Get-ChildItem (Join-Path $repo "mods") -Directory) {
+			if ($installedIds -contains "$($mod.Name)@$oldMarketplace") {
+				claude plugin uninstall "$($mod.Name)@$oldMarketplace" --scope user | Out-Null
+				if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+				Write-Output "removed $($mod.Name)@$oldMarketplace"
+			}
+		}
+		claude plugin marketplace remove $oldMarketplace | Out-Null
+		if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+		Write-Output "removed the $oldMarketplace marketplace"
+	}
 	claude plugin marketplace add $repo --scope user | Out-Null
 	if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 	foreach ($mod in Get-ChildItem (Join-Path $repo "mods") -Directory) {
-		claude plugin install "$($mod.Name)@asarel-claude-skills" --scope user | Out-Null
+		claude plugin install "$($mod.Name)@claude-workbench" --scope user | Out-Null
 		if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 		Write-Output "installed the $($mod.Name) mod"
 	}

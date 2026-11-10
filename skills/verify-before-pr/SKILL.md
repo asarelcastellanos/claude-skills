@@ -1,6 +1,6 @@
 ---
 name: "verify-before-pr"
-description: "Use before opening a PR, pushing, or calling a coding task done. It runs the real checks, gets a fresh-context review, and writes the PR description."
+description: "Use before opening a PR, pushing, or calling a coding task done. It runs the real checks and each issue's done-when tests, trims the diff, and writes the PR description."
 ---
 
 # Verify before PR
@@ -13,15 +13,17 @@ Find the project's checks in CLAUDE.md, package.json scripts, the Makefile, pypr
 
 Paste each command and the end of its output. Never write "tests pass" without output that shows it. If a check fails, fix it and run it again. If a check cannot run here, name it and say why.
 
-## 2. Check behavior end to end
+## 2. Prove each issue is solved
+
+Run every check on each issue's "Done when" list. Report each issue with its checks and what they showed. An issue whose checks don't all pass is not done.
+
+If the change has no issues, as with a small change that skipped `ship-a-change`, check it against what the user asked for instead.
+
+## 3. Check behavior end to end
 
 Use the changed behavior the way a user would. Run the CLI command, call the endpoint, load the page, or run the script on sample input. Write down what you ran and what happened.
 
 For a bug fix, reproduce the bug before the fix and show it gone after. Confirm the fix addresses the root cause.
-
-## 3. Get a fresh-context review
-
-Run the `pr-review` skill from the main session. It spawns `model-policy:reviewer` agents that have not seen your work. Give them the diff against the base branch and the stated intent of the change. Do not give them your reasoning or your opinion of the code. Don't hand the whole review to one agent, because a subagent can't start agents of its own. Then follow the `address-review-findings` skill for what it reports.
 
 ## 4. Simplify the diff
 
@@ -29,13 +31,9 @@ Read the full diff again. Remove dead code, debug prints, unused imports, commen
 
 Keep the change small. If it is over about 400 lines or mixes unrelated changes, propose splitting it into separate PRs.
 
-## 5. Fix recurring problems at the source
+## 5. Write the PR description
 
-Add each mistake worth remembering to LESSONS.md, as step 8 of `ship-a-change` describes. If LESSONS.md shows the mistake has happened before, propose a lasting fix to the user. The fix can be a lint rule, a line in CLAUDE.md or REVIEW.md, or an edit to a skill. Fixing one instance at a time does not stop the next one.
-
-## 6. Write the PR description
-
-Follow the PR description format in the `git-messages` skill. Its Risk section names the tier and how to revert.
+Follow the PR description format in the `git-messages` skill. Its Risk section names the tier and how to revert. End the Changes section with a `Closes #N` line for each issue the PR solves.
 
 Set the risk tier from what the change touches. Never set it from who wrote the change. The tiers are:
 
@@ -45,6 +43,8 @@ Set the risk tier from what the change touches. Never set it from who wrote the 
 
 The user reviews every PR into the default branch. For a high-risk change, point them to the parts that need the closest look. An agent's approval never replaces a person's.
 
-## 7. Report
+## 6. Report
 
-Tell the user what changed, the check results, the review outcome, and the risk tier. Keep it short.
+Tell the user what changed, the check results, each issue's result, and the risk tier. Keep it short.
+
+This skill does not review the change. Inside `ship-a-change`, the review comes next, once, at step 5, and lessons go into LESSONS.md only at step 7. Used on its own for a change that needs a review, run `pr-review` once before the PR into the default branch.

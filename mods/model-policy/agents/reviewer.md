@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews a diff or verifies one finding, and reports bugs with evidence. Use for pr-review finders and verifiers and the fresh-context review in verify-before-pr. It reads and runs code but never edits it.
+description: Reviews a diff or verifies one finding, and reports bugs with evidence. Use for pr-review finders and verifiers. It reads and runs code but never edits it.
 model: sonnet
 effort: high
 color: purple
