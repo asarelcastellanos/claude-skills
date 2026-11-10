@@ -30,11 +30,11 @@ A pre-existing finding is a bug the change did not introduce. Fix it only if the
 
 After you fix, run the checks from the `verify-before-pr` skill again. That means the tests, type checks, linter, build, each issue's "Done when" checks, and the end-to-end check. Show the output.
 
-The review does not run again. If a fix changes the approach or grows the diff by much, tell the user and let them decide whether it needs another review.
+The review does not run again, except in the case step 6 of `ship-a-change` names: a finding that shows the approach is wrong, or a fix over about 100 lines or outside the reviewed diff. Then the plan goes back to the user, and only the fix's diff is reviewed.
 
 ## 5. Report
 
-End with a table of every finding and its outcome. Then give the check results and any follow-ups. Mistakes worth remembering go into LESSONS.md at step 8 of `ship-a-change`, not here.
+End with a table of every finding and its outcome. Then give the check results and any follow-ups. Mistakes worth remembering go into LESSONS.md at step 7 of `ship-a-change`, not here.
 
 | Finding | Tag | Outcome | Note |
 |---|---|---|---|

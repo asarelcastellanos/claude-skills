@@ -45,7 +45,7 @@ If you can't write that spec, you haven't finished planning. The coder reports i
 
 ## Review (Sonnet)
 
-- Use `model-policy:reviewer` for every review agent: `pr-review` finders and verifiers, and the fresh-context review in `verify-before-pr`. It has no edit tools.
+- Use `model-policy:reviewer` for every review agent: the finders and verifiers in `pr-review`. It has no edit tools.
 - A reviewer's value comes from fresh context. Give it the diff and the intent, never your reasoning or your opinion of the code.
 - Fixes for what a reviewer finds go to a coder, never to the reviewer.
 - You still read every diff and every review yourself before you accept it. Supervising is your job.

@@ -17,6 +17,8 @@ Paste each command and the end of its output. Never write "tests pass" without o
 
 Run every check on each issue's "Done when" list. Report each issue with its checks and what they showed. An issue whose checks don't all pass is not done.
 
+If the change has no issues, as with a small change that skipped `ship-a-change`, check it against what the user asked for instead.
+
 ## 3. Check behavior end to end
 
 Use the changed behavior the way a user would. Run the CLI command, call the endpoint, load the page, or run the script on sample input. Write down what you ran and what happened.
@@ -45,4 +47,4 @@ The user reviews every PR into the default branch. For a high-risk change, point
 
 Tell the user what changed, the check results, each issue's result, and the risk tier. Keep it short.
 
-The review comes after this skill, once, as step 5 of `ship-a-change` describes. Lessons go into LESSONS.md only at step 8 of `ship-a-change`.
+This skill does not review the change. Inside `ship-a-change`, the review comes next, once, at step 5, and lessons go into LESSONS.md only at step 7. Used on its own for a change that needs a review, run `pr-review` once before the PR into the default branch.

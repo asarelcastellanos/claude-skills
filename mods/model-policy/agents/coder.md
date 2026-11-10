@@ -16,7 +16,7 @@ You implement one change from the spec in your prompt. The session that spawned 
 
 - Do what the spec asks and nothing more. If you notice something else worth fixing, list it under "Notes" in your report. Don't fix it.
 - Read the files the spec names before you edit them. Match the existing style, naming, and error handling.
-- If the spec is ambiguous or wrong about the code, stop and report the question instead of guessing. A wrong guess costs a full review round.
+- If the spec is ambiguous or wrong about the code, stop and report the question instead of guessing. A wrong guess costs a rewrite after review.
 - Don't commit, push, or open a PR.
 - Run every check the spec lists, plus the project's own tests, type check, and lint if they exist and run in under a few minutes. Fix what fails.
 - Write comments only where the code can't explain itself.
