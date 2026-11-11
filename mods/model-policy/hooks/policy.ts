@@ -4,8 +4,10 @@ import type { ModelPolicyDay, ModelPolicyPick } from '../types'
 
 export const WORKER_MODEL = 'sonnet'
 
-// Prose files. Sonnet writes them. The main session writes only the auto-memory notes.
-const DOC_EXTENSIONS = ['.md', '.mdx', '.markdown', '.txt']
+// Prose files. Sonnet writes them. The main session writes only memory notes, plan-mode plans,
+// and, for .txt, output captures in a temp dir.
+const MARKDOWN_EXTENSIONS = ['.md', '.mdx', '.markdown']
+const DOC_EXTENSIONS = [...MARKDOWN_EXTENSIONS, '.txt']
 
 // The main session may write logs, and anything under a temp dir or a .claude/ directory that is not prose.
 const LOG_EXTENSIONS = ['.log']
@@ -94,6 +96,8 @@ export type PathContext = {
 	cwd?: string
 	/** The TMPDIR environment value, when set. */
 	tmpdir?: string
+	/** The CLAUDE_CONFIG_DIR environment value, when set. */
+	configDir?: string
 }
 
 const TEMP_ROOTS = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
@@ -126,30 +130,51 @@ export function isDocPath(path: string, home: string, cwd: string): boolean {
 	return DOC_EXTENSIONS.some(ext => lower.endsWith(ext))
 }
 
-// A file under <home>/.claude/projects/<project>/memory/, the auto-memory directory.
-function inMemoryDir(abs: string, home: string): boolean {
-	if (!home) return false
-	const root = normalize(home, '/') + '/.claude/projects/'
-	if (!abs.startsWith(root)) return false
-	const [project, dir, file] = abs.slice(root.length).split('/')
-	return !!project && dir === 'memory' && !!file
+// The Claude config directories: <home>/.claude, and CLAUDE_CONFIG_DIR when it is set.
+function configRoots(home: string, cwd: string, configDir: string): string[] {
+	const roots: string[] = []
+	if (home) roots.push(normalize(home, '/') + '/.claude')
+	if (configDir) roots.push(resolvePath(configDir, home, cwd))
+	return roots
+}
+
+// A file under <config dir>/projects/<project>/memory/, the auto-memory directory.
+function inMemoryDir(abs: string, roots: readonly string[]): boolean {
+	return roots.some(root => {
+		const prefix = root + '/projects/'
+		if (!abs.startsWith(prefix)) return false
+		const [project, dir, file] = abs.slice(prefix.length).split('/')
+		return !!project && dir === 'memory' && !!file
+	})
+}
+
+// Plan mode writes its plan under <config dir>/plans/.
+function inPlansDir(abs: string, roots: readonly string[]): boolean {
+	return roots.some(root => abs.startsWith(root + '/plans/'))
 }
 
 /**
- * The main session may not write prose (.md, .mdx, .markdown, .txt) anywhere, except in the
- * auto-memory directory (~/.claude/projects/<project>/memory/). Sonnet writes prose.
+ * The main session may not write Markdown (.md, .mdx, .markdown) or .txt files. Sonnet writes prose.
+ * The exceptions are the auto-memory directory (~/.claude/projects/<project>/memory/), the
+ * plan-mode directory (~/.claude/plans/), the same two paths under CLAUDE_CONFIG_DIR, and .txt
+ * files in a temp dir, so output captures work.
  * Otherwise it may write logs, anything under a temp dir (/tmp, /private/tmp, /var/folders,
  * TMPDIR), and anything inside a .claude/ directory at any level. Everything else is code,
  * which Sonnet writes.
  */
-export function mainSessionMayWrite(path: string, home: string, cwd: string, tmpdir = ''): boolean {
+export function mainSessionMayWrite(path: string, home: string, cwd: string, tmpdir = '', configDir = ''): boolean {
 	const abs = resolvePath(path, home, cwd)
 	const lower = abs.toLowerCase()
-	if (DOC_EXTENSIONS.some(ext => lower.endsWith(ext))) return inMemoryDir(abs, home)
+	const temps = tmpdir && tmpdir !== '/' ? [...TEMP_ROOTS, normalize(tmpdir, '/')] : TEMP_ROOTS
+	const inTemp = temps.some(root => inside(abs, root))
+	if (DOC_EXTENSIONS.some(ext => lower.endsWith(ext))) {
+		const roots = configRoots(home, cwd, configDir)
+		if (inMemoryDir(abs, roots) || inPlansDir(abs, roots)) return true
+		return inTemp && !MARKDOWN_EXTENSIONS.some(ext => lower.endsWith(ext))
+	}
 	if (LOG_EXTENSIONS.some(ext => lower.endsWith(ext))) return true
 	if (abs.split('/').slice(0, -1).includes('.claude')) return true
-	const temps = tmpdir && tmpdir !== '/' ? [...TEMP_ROOTS, normalize(tmpdir, '/')] : TEMP_ROOTS
-	return temps.some(root => inside(abs, root))
+	return inTemp
 }
 
 // ---- Shell writes ----
@@ -164,7 +189,7 @@ function targetAllowed(raw: string, ctx: PathContext): boolean {
 	target = target.replace(/^\$(?:TMPDIR|\{TMPDIR(?::?-[^}]*)?\})(?=\/|$)/, ctx.tmpdir || '/tmp')
 	// Any other variable or substitution is unknown, so it is not allowed.
 	if (/[$`]/.test(target)) return false
-	return mainSessionMayWrite(target, ctx.home ?? '', ctx.cwd ?? '/', ctx.tmpdir ?? '')
+	return mainSessionMayWrite(target, ctx.home ?? '', ctx.cwd ?? '/', ctx.tmpdir ?? '', ctx.configDir ?? '')
 }
 
 // An interpreter's source that writes a file: open() in a write mode, write_text, writeFile, and so on.
@@ -435,7 +460,7 @@ function segmentWrites(segment: string, quotes: readonly string[], ctx: PathCont
  *
  * This is a best-effort guard against the main session writing code through the shell. The
  * model-roles skill is the primary rule. Known gaps: `sh -c` and `bash -c` strings, `dd of=`,
- * `curl -o`, `git checkout` and `git restore`, and PowerShell.
+ * `curl -o`, `touch`, `git checkout` and `git restore`, and PowerShell.
  */
 export function isFileWrite(command: string, ctx: PathContext = {}): boolean {
 	const { text, quotes, scripts, subs } = scan(command)

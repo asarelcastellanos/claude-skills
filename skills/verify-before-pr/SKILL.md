@@ -33,7 +33,7 @@ Keep the change small. If it is over about 400 lines or mixes unrelated changes,
 
 ## 5. Get the PR description written
 
-Do not write the PR description yourself. Send an outline to a `model-policy:coder`: the changes, the check results, the risk tier, and the issues the PR solves. Tell it to follow the PR description format in the `git-messages` skill. Its Risk section names the tier and how to revert. The Changes section ends with a `Closes #N` line for each issue the PR solves.
+Do not write the PR description yourself. Send an outline to a `model-policy:coder`: the changes, the check results, the risk tier, and the issues the PR solves. Tell it to follow the PR description format in the `git-messages` skill, to write the description to a file in the session scratchpad (a temp dir if none is named), and to report the path under "Notes". Its Risk section names the tier and how to revert. The Changes section ends with a `Closes #N` line for each issue the PR solves.
 
 Set the risk tier from what the change touches. Never set it from who wrote the change. The tiers are:
 
@@ -43,7 +43,7 @@ Set the risk tier from what the change touches. Never set it from who wrote the 
 
 The user reviews every PR into the default branch. For a high-risk change, point them to the parts that need the closest look. An agent's approval never replaces a person's.
 
-Review the result against `unslop` and the diff before you open the PR.
+Review the file against `unslop` and the diff, then open the PR with `gh pr create --body-file`.
 
 ## 6. Report
 

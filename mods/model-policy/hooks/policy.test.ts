@@ -35,7 +35,11 @@ function slash($: Engine, args: string) {
 // The engine's own tool answers: the call went through.
 function engineTools(on: On) {
 	on('tool.call', () => ({ result: {} }))
-	on('env.get', (_, e) => ({ value: (e as { name?: string }).name === 'TMPDIR' ? undefined : '/Users/me' }))
+	on('env.get', (_, e) => {
+		const name = (e as { name?: string }).name
+		if (name === 'CLAUDE_CONFIG_DIR') return { value: world.configDir }
+		return { value: name === 'TMPDIR' ? undefined : '/Users/me' }
+	})
 	const sid = { id: 's1' }
 	on('session.id', () => ({ value: sid.id }))
 	on('session.end', (_, e) => ({ sessionId: e.sessionId }))
@@ -45,6 +49,7 @@ function engineTools(on: On) {
 	const statuses: Array<string | undefined> = []
 	const world = {
 		percent: undefined as number | undefined,
+		configDir: undefined as string | undefined,
 		throws: false,
 		deny: false,
 		failSet: false,
@@ -103,7 +108,7 @@ test('A: every fork is denied, reviews run on sonnet', () => {
 })
 
 test('B5: where the main session may write', () => {
-	const may = (path: string, tmp = '') => mainSessionMayWrite(path, '/Users/me', '/work/app', tmp)
+	const may = (path: string, tmp = '', configDir = '') => mainSessionMayWrite(path, '/Users/me', '/work/app', tmp, configDir)
 	expect(may('src/a.ts')).toBe(false)
 	expect(may('/work/app/README.md')).toBe(false)
 	expect(may('notes.TXT')).toBe(false)
@@ -126,8 +131,17 @@ test('B5: where the main session may write', () => {
 	expect(may('/custom/tmp/a.ts')).toBe(false)
 	expect(may('/custom/tmp/a.ts', '/custom/tmp')).toBe(true)
 	expect(may('~/.claude/CLAUDE.json')).toBe(true)
-	// Prose is blocked everywhere, temp dirs and .claude/ directories included.
+	// Markdown is blocked everywhere, temp dirs and .claude/ directories included.
 	expect(may('/tmp/plan.md')).toBe(false)
+	expect(may('/private/tmp/claude-501/scratch/plan.mdx')).toBe(false)
+	expect(may('/var/folders/ab/cd/T/plan.markdown')).toBe(false)
+	// A .txt file is allowed in a temp dir, so output captures work. Elsewhere it is blocked.
+	expect(may('/tmp/out.txt')).toBe(true)
+	expect(may('/private/tmp/claude-501/scratch/out.TXT')).toBe(true)
+	expect(may('/custom/tmp/out.txt', '/custom/tmp')).toBe(true)
+	expect(may('/tmp/../work/out.txt')).toBe(false)
+	expect(may('/work/app/out.txt')).toBe(false)
+	expect(may('/Users/me/.claude/notes.txt')).toBe(false)
 	expect(may('/Users/me/.claude/CLAUDE.md')).toBe(false)
 	expect(may('.claude/skills/x/SKILL.md')).toBe(false)
 	// The auto-memory directory is the one exception.
@@ -141,6 +155,35 @@ test('B5: where the main session may write', () => {
 	expect(may('/Users/other/.claude/projects/a/memory/x.md')).toBe(false)
 	expect(may('/work/app/.claude/projects/a/memory/x.md')).toBe(false)
 	expect(mainSessionMayWrite('~/.claude/projects/a/memory/x.md', '', '/work/app')).toBe(false)
+	// Plan mode writes its plan under ~/.claude/plans/.
+	expect(may('/Users/me/.claude/plans/fix-it.md')).toBe(true)
+	expect(may('~/.claude/plans/fix-it.md')).toBe(true)
+	expect(may('/Users/me/.claude/plans/../CLAUDE.md')).toBe(false)
+	expect(may('/Users/me/.claude/plans')).toBe(true)
+	expect(may('/Users/me/.claude/notplans/x.md')).toBe(false)
+	expect(may('/work/app/.claude/plans/x.md')).toBe(false)
+	expect(may('/Users/other/.claude/plans/x.md')).toBe(false)
+})
+
+test('CLAUDE_CONFIG_DIR: memory and plans under it are allowed, ~/.claude stays allowed', () => {
+	const may = (path: string, configDir: string) => mainSessionMayWrite(path, '/Users/me', '/work/app', '', configDir)
+	expect(may('/cfg/claude/projects/-work-app/memory/MEMORY.md', '/cfg/claude')).toBe(true)
+	expect(may('/cfg/claude/projects/-work-app/memory/note.md', '/cfg/claude/')).toBe(true)
+	expect(may('/cfg/claude/plans/p.md', '/cfg/claude')).toBe(true)
+	expect(may('~/alt/projects/a/memory/x.md', '~/alt')).toBe(true)
+	expect(may('/Users/me/.claude/projects/a/memory/x.md', '/cfg/claude')).toBe(true)
+	expect(may('/cfg/claude/CLAUDE.md', '/cfg/claude')).toBe(false)
+	expect(may('/cfg/claude/projects/a/notes.md', '/cfg/claude')).toBe(false)
+	expect(may('/cfg/claude/projects/a/b/memory/x.md', '/cfg/claude')).toBe(false)
+	expect(may('/cfg/claude/projects/a/memory/../../b/x.md', '/cfg/claude')).toBe(false)
+	// Without the variable, the path is an ordinary doc path.
+	expect(may('/cfg/claude/projects/a/memory/x.md', '')).toBe(false)
+	expect(may('/cfg/claude/plans/p.md', '')).toBe(false)
+	// The shell honors it too.
+	const ctx = { home: '/Users/me', cwd: '/work/app', configDir: '/cfg/claude' }
+	expect(isFileWrite('echo x >> /cfg/claude/projects/a/memory/MEMORY.md', ctx)).toBe(false)
+	expect(isFileWrite('echo x > /cfg/claude/CLAUDE.md', ctx)).toBe(true)
+	expect(isFileWrite('echo x >> /cfg/claude/projects/a/memory/MEMORY.md', { ...ctx, configDir: '' })).toBe(true)
 })
 
 test('isDocPath: Markdown and plain-text files', () => {
@@ -200,10 +243,11 @@ test('shell write detection: writes', () => {
 		// Prose is not written from the shell, except in the memory directory.
 		'echo x > README.md',
 		'echo x >> ~/.claude/notes.md',
-		'echo x > /tmp/out.txt',
 		'echo x | tee /tmp/plan.md',
+		'echo x > /tmp/plan.mdx',
 		'mv notes.md docs/notes.md',
-		'cp a.txt /tmp/b.txt',
+		'cp a.txt /tmp/b.md',
+		'echo x > out.txt',
 		'echo x > ~/.claude/projects/-Users-me-app/notes.md',
 		'echo x > /work/app/.claude/projects/a/memory/x.md',
 	]
@@ -220,6 +264,10 @@ test('shell write detection: no false positives', () => {
 		'ls 2>/dev/null',
 		'echo err >&2',
 		'echo hi > /tmp/out.log',
+		'echo hi > /tmp/out.txt',
+		'pytest > /tmp/out.txt 2>&1',
+		'cp a.txt /tmp/b.txt',
+		'echo hi | tee /private/tmp/claude-501/x/out.txt',
 		'echo hi > "/private/tmp/claude-501/x/out.log"',
 		'echo hi | tee /tmp/out.log',
 		'cat <<EOF\na > b\nEOF',
@@ -300,7 +348,7 @@ test('a resumed agent passes through untouched', async ($, on) => {
 })
 
 test('main-loop Edit: code and prose denied, memory allowed, subagent allowed', async ($, on) => {
-	engineTools(on)
+	const engine = engineTools(on)
 	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
 
 	const code = await $.tool.call({ tool: 'Edit', file_path: 'src/a.ts', old_string: 'a', new_string: 'b' })
@@ -319,6 +367,22 @@ test('main-loop Edit: code and prose denied, memory allowed, subagent allowed', 
 	expect(memoryTilde).not.toHaveProperty('deny')
 	const bashMemory = await $.tool.call({ tool: 'Bash', command: 'echo x >> ~/.claude/projects/-work-app/memory/MEMORY.md' })
 	expect(bashMemory).not.toHaveProperty('deny')
+	const plan = await $.tool.call({ tool: 'Write', file_path: '/Users/me/.claude/plans/fix-it.md', content: 'x' })
+	expect(plan).not.toHaveProperty('deny')
+	const tmpTxt = await $.tool.call({ tool: 'Bash', command: 'pytest > /tmp/out.txt 2>&1' })
+	expect(tmpTxt).not.toHaveProperty('deny')
+	const tmpMd = await $.tool.call({ tool: 'Write', file_path: '/tmp/plan.md', content: 'x' })
+	expect(tmpMd).toHaveProperty('deny')
+	const otherConfig = await $.tool.call({ tool: 'Write', file_path: '/cfg/claude/projects/-work-app/memory/MEMORY.md', content: 'x' })
+	expect(otherConfig).toHaveProperty('deny')
+	engine.world.configDir = '/cfg/claude'
+	const configMemory = await $.tool.call({ tool: 'Write', file_path: '/cfg/claude/projects/-work-app/memory/MEMORY.md', content: 'x' })
+	expect(configMemory).not.toHaveProperty('deny')
+	const configPlan = await $.tool.call({ tool: 'Edit', file_path: '/cfg/claude/plans/p.md', old_string: 'a', new_string: 'b' })
+	expect(configPlan).not.toHaveProperty('deny')
+	const configBash = await $.tool.call({ tool: 'Bash', command: 'echo x >> /cfg/claude/projects/-work-app/memory/MEMORY.md' })
+	expect(configBash).not.toHaveProperty('deny')
+	engine.world.configDir = undefined
 	const subProse = await $.tool.call({ tool: 'Edit', file_path: 'README.md', old_string: 'a', new_string: 'b', agentId: 'a1' })
 	expect(subProse).not.toHaveProperty('deny')
 	const subProseWrite = await $.tool.call({ tool: 'Write', file_path: 'docs/plan.md', content: 'x', agentId: 'a1' })

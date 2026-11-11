@@ -267,13 +267,14 @@ export const register: Register = (on, options) => {
 		// HOME is the user's home on macOS and Linux, USERPROFILE on Windows.
 		const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
 		const tmpdir = (await $.env.get('TMPDIR')) ?? ''
+		const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? ''
 		const cwd = await $.session.cwd()
-		if (mainSessionMayWrite(path, home, cwd, tmpdir)) return next(e)
+		if (mainSessionMayWrite(path, home, cwd, tmpdir, configDir)) return next(e)
 		if (isDocPath(path, home, cwd)) {
 			return {
 				deny:
 					`Model policy: the main session does not write docs. Only memory notes under ` +
-					`~/.claude/projects/*/memory/ are allowed. Send the writing to the model-policy:coder agent ` +
+					`~/.claude/projects/*/memory/, plans under ~/.claude/plans/, and .txt files in a temp dir are allowed. Send the writing to the model-policy:coder agent ` +
 					`with an outline, or an exact small edit to the model-policy:mechanic agent. Blocked path: ${path}`,
 			}
 		}
@@ -291,13 +292,15 @@ export const register: Register = (on, options) => {
 		if (e.agentId !== undefined || !(await read($, enabledAtom))) return next(e)
 		const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
 		const tmpdir = (await $.env.get('TMPDIR')) ?? ''
-		if (!isFileWrite(e.command, { home, cwd: await $.session.cwd(), tmpdir })) return next(e)
+		const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? ''
+		if (!isFileWrite(e.command, { home, cwd: await $.session.cwd(), tmpdir, configDir })) return next(e)
 		return {
 			deny:
 				`Model policy: the main session does not write code or docs, including through the shell ` +
 				`(sed -i, redirects, tee, cp, mv, patches). Delegate code to the model-policy:coder agent ` +
 				`with a precise spec. Send docs to the model-policy:coder agent with an outline, or an exact ` +
-				`small edit to the model-policy:mechanic agent. Only memory notes under ~/.claude/projects/*/memory/ are allowed. ` +
+				`small edit to the model-policy:mechanic agent. Only memory notes under ~/.claude/projects/*/memory/, plans under ` +
+				`~/.claude/plans/, and .txt files in a temp dir are allowed. ` +
 				`Blocked command: ${e.command.slice(0, 200)}`,
 		}
 	}).catch(($, e, next) =>

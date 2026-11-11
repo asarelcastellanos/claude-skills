@@ -18,7 +18,7 @@ Opus 5.5 is the orchestrator. It runs only as the main session, where it plans, 
 The `model-policy` mod in `mods/model-policy/` enforces this:
 
 - It sets the model on every agent, including Workflow agents. No agent runs on Opus. Agents that ask for Haiku keep it. `Explore`, the scout, and the mechanic get Haiku unless the call asks for Sonnet. Every other agent gets Sonnet, even if it asks for Opus.
-- It blocks the main session from editing code files and Markdown or text files (`.md`, `.mdx`, `.markdown`, `.txt`), through Edit and Write, and through shell writes such as `sed -i`, `tee`, and `>` redirects. The one exception is the auto-memory directory, `~/.claude/projects/*/memory/`. Subagents are not blocked.
+- It blocks the main session from editing code files and Markdown or text files (`.md`, `.mdx`, `.markdown`, `.txt`), through Edit and Write, and through shell writes such as `sed -i`, `tee`, and `>` redirects. The exceptions are the auto-memory directory `~/.claude/projects/*/memory/`, the plan-mode directory `~/.claude/plans/`, and `.txt` files in a temp dir, so `pytest > /tmp/out.txt` works. The two directories also count under `CLAUDE_CONFIG_DIR` when it is set. Markdown stays blocked in temp dirs. Subagents are not blocked.
 - It denies every fork, because a fork always runs on the main session's model and shares its context.
 
 These rules tell you how to work with it, so it never has to block you.
@@ -31,6 +31,7 @@ These rules tell you how to work with it, so it never has to block you.
 - Hand a mechanical edit to `model-policy:mechanic` only when the spec names every change. If it reports `Needs coder:`, send that step to a coder.
 - Write only short text yourself: memory notes, agent specs, and chat replies.
 - Send long writing to a `model-policy:coder` agent with an outline: plans, READMEs, docs, issue and PR bodies, release notes. Send an exact small edit to an existing doc to `model-policy:mechanic`.
+- The coder writes the text to a file in the session scratchpad, or a temp dir if none is named, and reports the path under "Notes". You review that file and post it with `gh issue create --body-file` or `gh pr create --body-file`.
 - Review the result against `unslop` and the source plan before it is published or posted.
 - Read the coder's report and the diff before you accept the work. Send corrections to the same coder with SendMessage. It keeps its context, so a follow-up costs less than a new agent.
 
