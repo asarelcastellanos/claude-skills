@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { PICK_LABELS, dayKey, decideSpawn, family, isFileWrite, mainSessionMayWrite, pickFromAnswer } from './policy'
+import { PICK_LABELS, dayKey, decideSpawn, family, isDocPath, isFileWrite, mainSessionMayWrite, pickFromAnswer } from './policy'
 
 // Beneath the plugin the engine's own spawn answers with the model it was given.
 function engineSpawn(on: On) {
@@ -35,7 +35,11 @@ function slash($: Engine, args: string) {
 // The engine's own tool answers: the call went through.
 function engineTools(on: On) {
 	on('tool.call', () => ({ result: {} }))
-	on('env.get', (_, e) => ({ value: (e as { name?: string }).name === 'TMPDIR' ? undefined : '/Users/me' }))
+	on('env.get', (_, e) => {
+		const name = (e as { name?: string }).name
+		if (name === 'CLAUDE_CONFIG_DIR') return { value: world.configDir }
+		return { value: name === 'TMPDIR' ? undefined : '/Users/me' }
+	})
 	const sid = { id: 's1' }
 	on('session.id', () => ({ value: sid.id }))
 	on('session.end', (_, e) => ({ sessionId: e.sessionId }))
@@ -45,6 +49,7 @@ function engineTools(on: On) {
 	const statuses: Array<string | undefined> = []
 	const world = {
 		percent: undefined as number | undefined,
+		configDir: undefined as string | undefined,
 		throws: false,
 		deny: false,
 		failSet: false,
@@ -103,10 +108,12 @@ test('A: every fork is denied, reviews run on sonnet', () => {
 })
 
 test('B5: where the main session may write', () => {
-	const may = (path: string, tmp = '') => mainSessionMayWrite(path, '/Users/me', '/work/app', tmp)
+	const may = (path: string, tmp = '', configDir = '') => mainSessionMayWrite(path, '/Users/me', '/work/app', tmp, configDir)
 	expect(may('src/a.ts')).toBe(false)
-	expect(may('/work/app/README.md')).toBe(true)
-	expect(may('notes.TXT')).toBe(true)
+	expect(may('/work/app/README.md')).toBe(false)
+	expect(may('notes.TXT')).toBe(false)
+	expect(may('guide.mdx')).toBe(false)
+	expect(may('guide.markdown')).toBe(false)
 	expect(may('build.log')).toBe(true)
 	expect(may('/Users/me/.claude/settings.json')).toBe(true)
 	expect(may('/Users/me/.claude/../x.ts')).toBe(false)
@@ -124,6 +131,67 @@ test('B5: where the main session may write', () => {
 	expect(may('/custom/tmp/a.ts')).toBe(false)
 	expect(may('/custom/tmp/a.ts', '/custom/tmp')).toBe(true)
 	expect(may('~/.claude/CLAUDE.json')).toBe(true)
+	// Markdown is blocked everywhere, temp dirs and .claude/ directories included.
+	expect(may('/tmp/plan.md')).toBe(false)
+	expect(may('/private/tmp/claude-501/scratch/plan.mdx')).toBe(false)
+	expect(may('/var/folders/ab/cd/T/plan.markdown')).toBe(false)
+	// A .txt file is allowed in a temp dir, so output captures work. Elsewhere it is blocked.
+	expect(may('/tmp/out.txt')).toBe(true)
+	expect(may('/private/tmp/claude-501/scratch/out.TXT')).toBe(true)
+	expect(may('/custom/tmp/out.txt', '/custom/tmp')).toBe(true)
+	expect(may('/tmp/../work/out.txt')).toBe(false)
+	expect(may('/work/app/out.txt')).toBe(false)
+	expect(may('/Users/me/.claude/notes.txt')).toBe(false)
+	expect(may('/Users/me/.claude/CLAUDE.md')).toBe(false)
+	expect(may('.claude/skills/x/SKILL.md')).toBe(false)
+	// The auto-memory directory is the one exception.
+	expect(may('/Users/me/.claude/projects/-Users-me-app/memory/MEMORY.md')).toBe(true)
+	expect(may('~/.claude/projects/-Users-me-app/memory/note.md')).toBe(true)
+	expect(may('/Users/me/.claude/projects/-Users-me-app/memory/sub/note.txt')).toBe(true)
+	expect(may('/Users/me/.claude/projects/a/memory/../../b/c.md')).toBe(false)
+	expect(may('/Users/me/.claude/projects/-Users-me-app/notes.md')).toBe(false)
+	expect(may('/Users/me/.claude/projects/memory/MEMORY.md')).toBe(false)
+	expect(may('/Users/me/.claude/projects/a/b/memory/x.md')).toBe(false)
+	expect(may('/Users/other/.claude/projects/a/memory/x.md')).toBe(false)
+	expect(may('/work/app/.claude/projects/a/memory/x.md')).toBe(false)
+	expect(mainSessionMayWrite('~/.claude/projects/a/memory/x.md', '', '/work/app')).toBe(false)
+	// Plan mode writes its plan under ~/.claude/plans/.
+	expect(may('/Users/me/.claude/plans/fix-it.md')).toBe(true)
+	expect(may('~/.claude/plans/fix-it.md')).toBe(true)
+	expect(may('/Users/me/.claude/plans/../CLAUDE.md')).toBe(false)
+	expect(may('/Users/me/.claude/plans')).toBe(true)
+	expect(may('/Users/me/.claude/notplans/x.md')).toBe(false)
+	expect(may('/work/app/.claude/plans/x.md')).toBe(false)
+	expect(may('/Users/other/.claude/plans/x.md')).toBe(false)
+})
+
+test('CLAUDE_CONFIG_DIR: memory and plans under it are allowed, ~/.claude stays allowed', () => {
+	const may = (path: string, configDir: string) => mainSessionMayWrite(path, '/Users/me', '/work/app', '', configDir)
+	expect(may('/cfg/claude/projects/-work-app/memory/MEMORY.md', '/cfg/claude')).toBe(true)
+	expect(may('/cfg/claude/projects/-work-app/memory/note.md', '/cfg/claude/')).toBe(true)
+	expect(may('/cfg/claude/plans/p.md', '/cfg/claude')).toBe(true)
+	expect(may('~/alt/projects/a/memory/x.md', '~/alt')).toBe(true)
+	expect(may('/Users/me/.claude/projects/a/memory/x.md', '/cfg/claude')).toBe(true)
+	expect(may('/cfg/claude/CLAUDE.md', '/cfg/claude')).toBe(false)
+	expect(may('/cfg/claude/projects/a/notes.md', '/cfg/claude')).toBe(false)
+	expect(may('/cfg/claude/projects/a/b/memory/x.md', '/cfg/claude')).toBe(false)
+	expect(may('/cfg/claude/projects/a/memory/../../b/x.md', '/cfg/claude')).toBe(false)
+	// Without the variable, the path is an ordinary doc path.
+	expect(may('/cfg/claude/projects/a/memory/x.md', '')).toBe(false)
+	expect(may('/cfg/claude/plans/p.md', '')).toBe(false)
+	// The shell honors it too.
+	const ctx = { home: '/Users/me', cwd: '/work/app', configDir: '/cfg/claude' }
+	expect(isFileWrite('echo x >> /cfg/claude/projects/a/memory/MEMORY.md', ctx)).toBe(false)
+	expect(isFileWrite('echo x > /cfg/claude/CLAUDE.md', ctx)).toBe(true)
+	expect(isFileWrite('echo x >> /cfg/claude/projects/a/memory/MEMORY.md', { ...ctx, configDir: '' })).toBe(true)
+})
+
+test('isDocPath: Markdown and plain-text files', () => {
+	expect(isDocPath('README.md', '/Users/me', '/work/app')).toBe(true)
+	expect(isDocPath('~/.claude/projects/a/memory/x.MD', '/Users/me', '/work/app')).toBe(true)
+	expect(isDocPath('docs/a.txt', '/Users/me', '/work/app')).toBe(true)
+	expect(isDocPath('src/a.ts', '/Users/me', '/work/app')).toBe(false)
+	expect(isDocPath('build.log', '/Users/me', '/work/app')).toBe(false)
 })
 
 test('shell write detection: writes', () => {
@@ -172,6 +240,16 @@ test('shell write detection: writes', () => {
 		'echo $(sed -i s/a/b/ f.ts)',
 		'FOO=1 sudo sed -i s/a/b/ f.ts',
 		'(cp a src/b.ts)',
+		// Prose is not written from the shell, except in the memory directory.
+		'echo x > README.md',
+		'echo x >> ~/.claude/notes.md',
+		'echo x | tee /tmp/plan.md',
+		'echo x > /tmp/plan.mdx',
+		'mv notes.md docs/notes.md',
+		'cp a.txt /tmp/b.md',
+		'echo x > out.txt',
+		'echo x > ~/.claude/projects/-Users-me-app/notes.md',
+		'echo x > /work/app/.claude/projects/a/memory/x.md',
 	]
 	for (const command of writes) expect([command, isFileWrite(command, ctx)]).toEqual([command, true])
 })
@@ -185,9 +263,13 @@ test('shell write detection: no false positives', () => {
 		'ls 2>&1 | head',
 		'ls 2>/dev/null',
 		'echo err >&2',
+		'echo hi > /tmp/out.log',
 		'echo hi > /tmp/out.txt',
-		'echo hi > "/private/tmp/claude-501/x/out.txt"',
-		'echo hi | tee /tmp/out.txt',
+		'pytest > /tmp/out.txt 2>&1',
+		'cp a.txt /tmp/b.txt',
+		'echo hi | tee /private/tmp/claude-501/x/out.txt',
+		'echo hi > "/private/tmp/claude-501/x/out.log"',
+		'echo hi | tee /tmp/out.log',
 		'cat <<EOF\na > b\nEOF',
 		'grep -rn "foo" src | sed -n 1,5p',
 		'npm test 2>&1 | tail -20',
@@ -206,12 +288,12 @@ test('shell write detection: no false positives', () => {
 		'cmd > $TMPDIR/x',
 		'cmd > ${TMPDIR}/x',
 		'cmd > /var/folders/ab/T/x',
-		'echo x > README.md',
-		'echo x >> ~/.claude/notes.md',
+		'echo x >> ~/.claude/projects/-Users-me-app/memory/MEMORY.md',
+		'echo x > ~/.claude/projects/-Users-me-app/memory/note.md',
 		'echo x > .claude/settings.json',
 		// B4: cp/mv to allowed places, here-string, interpreter heredoc that only prints.
 		'cp a.ts /tmp/a.ts',
-		'mv notes.md docs/notes.md',
+		'mv notes.md /tmp/notes.log',
 		'npm install left-pad',
 		'grep x <<<"foo"\necho done',
 		"python3 - <<'PY'\nprint('hi')\nPY",
@@ -220,7 +302,7 @@ test('shell write detection: no false positives', () => {
 		'make | tee out.log > /dev/null',
 		'make | tee /tmp/out.log 2>&1',
 		'cp a /tmp/b 2>/dev/null',
-		'cp a.txt /tmp/b.txt 2>&1',
+		'cp a.txt /tmp/b.log 2>&1',
 		'git apply --check p.diff && git apply --stat p.diff',
 		'patch --dry-run -p1 < p',
 		'echo $((1<<n))\ncat > /tmp/a.ts',
@@ -265,14 +347,51 @@ test('a resumed agent passes through untouched', async ($, on) => {
 	expect(seen.map(s => s.model)).toEqual(['haiku', undefined])
 })
 
-test('main-loop Edit: code denied, prose allowed, subagent allowed', async ($, on) => {
-	engineTools(on)
+test('main-loop Edit: code and prose denied, memory allowed, subagent allowed', async ($, on) => {
+	const engine = engineTools(on)
 	await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true })
 
 	const code = await $.tool.call({ tool: 'Edit', file_path: 'src/a.ts', old_string: 'a', new_string: 'b' })
 	expect(code).toHaveProperty('deny')
 	const prose = await $.tool.call({ tool: 'Edit', file_path: 'README.md', old_string: 'a', new_string: 'b' })
-	expect(prose).not.toHaveProperty('deny')
+	expect(prose).toHaveProperty('deny')
+	const reason = (prose as { deny: string }).deny
+	expect(reason).toMatch(/model-policy:coder/)
+	expect(reason).toMatch(/outline/)
+	expect(reason).toMatch(/model-policy:mechanic/)
+	const proseWrite = await $.tool.call({ tool: 'Write', file_path: 'docs/plan.txt', content: 'x' })
+	expect(proseWrite).toHaveProperty('deny')
+	const memory = await $.tool.call({ tool: 'Write', file_path: '/Users/me/.claude/projects/-work-app/memory/MEMORY.md', content: 'x' })
+	expect(memory).not.toHaveProperty('deny')
+	const memoryTilde = await $.tool.call({ tool: 'Edit', file_path: '~/.claude/projects/-work-app/memory/note.md', old_string: 'a', new_string: 'b' })
+	expect(memoryTilde).not.toHaveProperty('deny')
+	const bashMemory = await $.tool.call({ tool: 'Bash', command: 'echo x >> ~/.claude/projects/-work-app/memory/MEMORY.md' })
+	expect(bashMemory).not.toHaveProperty('deny')
+	const plan = await $.tool.call({ tool: 'Write', file_path: '/Users/me/.claude/plans/fix-it.md', content: 'x' })
+	expect(plan).not.toHaveProperty('deny')
+	const tmpTxt = await $.tool.call({ tool: 'Bash', command: 'pytest > /tmp/out.txt 2>&1' })
+	expect(tmpTxt).not.toHaveProperty('deny')
+	const tmpMd = await $.tool.call({ tool: 'Write', file_path: '/tmp/plan.md', content: 'x' })
+	expect(tmpMd).toHaveProperty('deny')
+	const otherConfig = await $.tool.call({ tool: 'Write', file_path: '/cfg/claude/projects/-work-app/memory/MEMORY.md', content: 'x' })
+	expect(otherConfig).toHaveProperty('deny')
+	engine.world.configDir = '/cfg/claude'
+	const configMemory = await $.tool.call({ tool: 'Write', file_path: '/cfg/claude/projects/-work-app/memory/MEMORY.md', content: 'x' })
+	expect(configMemory).not.toHaveProperty('deny')
+	const configPlan = await $.tool.call({ tool: 'Edit', file_path: '/cfg/claude/plans/p.md', old_string: 'a', new_string: 'b' })
+	expect(configPlan).not.toHaveProperty('deny')
+	const configBash = await $.tool.call({ tool: 'Bash', command: 'echo x >> /cfg/claude/projects/-work-app/memory/MEMORY.md' })
+	expect(configBash).not.toHaveProperty('deny')
+	engine.world.configDir = undefined
+	const subProse = await $.tool.call({ tool: 'Edit', file_path: 'README.md', old_string: 'a', new_string: 'b', agentId: 'a1' })
+	expect(subProse).not.toHaveProperty('deny')
+	const subProseWrite = await $.tool.call({ tool: 'Write', file_path: 'docs/plan.md', content: 'x', agentId: 'a1' })
+	expect(subProseWrite).not.toHaveProperty('deny')
+	const bashProse = await $.tool.call({ tool: 'Bash', command: 'echo x > README.md' })
+	expect(bashProse).toHaveProperty('deny')
+	expect((bashProse as { deny: string }).deny).toMatch(/model-policy:coder/)
+	const subBashProse = await $.tool.call({ tool: 'Bash', command: 'echo x > README.md', agentId: 'a1' })
+	expect(subBashProse).not.toHaveProperty('deny')
 	const sub = await $.tool.call({ tool: 'Edit', file_path: 'src/a.ts', old_string: 'a', new_string: 'b', agentId: 'a1' })
 	expect(sub).not.toHaveProperty('deny')
 	const projectClaude = await $.tool.call({ tool: 'Write', file_path: '.claude/settings.json', content: '{}' })
@@ -670,6 +789,14 @@ const SHELL_BLOCKED: string[] = [
 	"perl -i -pe 1 a.ts",
 	"patch -p1 < x.diff",
 	"echo x > a.md.bak",
+	"echo x > file.TXT",
+	"git diff > p.txt",
+	"cat > notes.md <<EOF\nhello\nEOF",
+	"cat <<EOF > docs/a.md\nx\nEOF",
+	"echo x > a.md",
+	"echo x > A.MD",
+	"cp a.ts b.md",
+	"printf \"%s\\n\" a >> notes.txt",
 	"echo x > .claude",
 	"echo x > \"/tmp/a b.ts\"",
 	"git commit -m \"x\" && echo y > a.ts",
@@ -699,7 +826,6 @@ const SHELL_ALLOWED: string[] = [
 	"git diff HEAD~1 -- a.ts",
 	"git status --short",
 	"git diff > /tmp/x.patch",
-	"git diff > p.txt",
 	"npm run build 2>&1 | tail -20",
 	"pnpm test -- --grep \"a > b\"",
 	"bun run test > /tmp/out",
@@ -716,8 +842,6 @@ const SHELL_ALLOWED: string[] = [
 	"curl -o /dev/null -s http://a",
 	"curl -sL http://a | jq .",
 	"gh pr create --title \"t\" --body \"$(cat <<'EOF'\n## S\n- a > b\nEOF\n)\"",
-	"cat > notes.md <<EOF\nhello\nEOF",
-	"cat <<EOF > docs/a.md\nx\nEOF",
 	"sed -n \"1,5p\" a.ts",
 	"sed -n 1,5p a.ts | head",
 	"awk '{ if ($1 > 3) print }' f",
@@ -745,8 +869,6 @@ const SHELL_ALLOWED: string[] = [
 	"echo x > /var/folders/a/b.ts",
 	"echo x > .claude/a.ts",
 	"echo x > ~/.claude/a.ts",
-	"echo x > a.md",
-	"echo x > A.MD",
 	"cat a.ts",
 	"cat a.ts b.ts | wc -l",
 	"wc -l < a.ts",
@@ -777,7 +899,8 @@ const SHELL_ALLOWED: string[] = [
 	"mv a.ts /tmp/b.ts",
 	"cp -r a /tmp/b",
 	"cp a.ts ~/.claude/x",
-	"cp a.ts b.md",
+	"echo x > ~/.claude/projects/-Users-a-proj/memory/MEMORY.md",
+	"cp a.ts /tmp/b.log",
 	"ln -s a /tmp/b",
 	"echo \"x\" >&2",
 	"echo x 1>&2",
@@ -808,7 +931,6 @@ const SHELL_ALLOWED: string[] = [
 	"for i in 1 2; do echo $((i>1)); done",
 	"git commit -m \"a\" 2>&1 | tail -3",
 	"echo done >> /tmp/log",
-	"printf \"%s\\n\" a >> notes.txt",
 	"gh pr view 1 --json title -q \".title\"",
 	"gh api repos/x/y --jq \".[] | .a\"",
 	"git diff --name-only | while read f; do echo \"$f\"; done",
@@ -831,7 +953,6 @@ const SHELL_ALLOWED: string[] = [
 	"sed s/-i/x/ a.ts",
 	"patch --dry-run -p1 < x.diff",
 	"patch -p1 --dry-run < x.diff",
-	"echo x > file.TXT",
 ]
 
 test(`isFileWrite regression table (${SHELL_BLOCKED.length} blocked, ${SHELL_ALLOWED.length} allowed)`, () => {

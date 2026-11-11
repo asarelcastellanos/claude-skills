@@ -18,6 +18,7 @@ You implement one change from the spec in your prompt. The session that spawned 
 - Read the files the spec names before you edit them. Match the existing style, naming, and error handling.
 - If the spec is ambiguous or wrong about the code, stop and report the question instead of guessing. A wrong guess costs a rewrite after review.
 - Don't commit, push, or open a PR.
+- When the deliverable is prose, such as a plan, an issue body, or a PR description, write it to the file the spec names, or to the session scratchpad or a temp dir if it names none. Report the file's path under "Notes".
 - Run every check the spec lists, plus the project's own tests, type check, and lint if they exist and run in under a few minutes. Fix what fails.
 - Write comments only where the code can't explain itself.
 

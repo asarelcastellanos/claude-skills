@@ -42,7 +42,7 @@ The vaguer the request, the more questions you ask:
 
 When the user says something fails, breaks, or behaves differently than they expect, do this before you investigate or fix anything, even when the fix looks small:
 
-1. Create a GitHub issue that states the report in the user's words.
+1. Have a `model-policy:coder` write a GitHub issue that states the report in the user's words, from your outline. The coder writes the body to a file in the session scratchpad (a temp dir if none is named) and reports the path under "Notes". Review the file against `unslop` and the report, then create the issue with `gh issue create --body-file`.
 2. Try to reproduce it. Have a `model-policy:scout` run the steps, or run them yourself.
 3. Record the attempt on the issue with `gh issue comment`: the steps, what was expected, what happened, and whether it reproduced. Paste the relevant output. Remove tokens, keys, and personal data from it first. For a screenshot, describe it in the comment and ask the user to attach the image.
 4. Add a "Done when" list to the issue. Its first check is the reproduction, which must now pass.
@@ -72,9 +72,9 @@ Show the checkpoints with the plan for the first one.
 
 ## 2. Plan, track, then get the plan approved
 
-Write one GitHub issue for each piece of work, with `gh issue create`, unless a reported failure already has its issue. Each issue ends with a "Done when" list: the tests or checks that prove the issue is solved. Put each issue in its checkpoint's milestone and on the project board, if the task has them. Write the user's answers from step 1 into the issues they affect.
+Create one GitHub issue for each piece of work, with `gh issue create`, unless a reported failure already has its issue. Do not write the issue bodies yourself. Send an outline of each issue to a `model-policy:coder`. The outline holds the goal, the user's answers from step 1 that affect the issue, and its "Done when" list: the tests or checks that prove the issue is solved. The coder writes each body to a file in the session scratchpad (a temp dir if none is named) and reports the paths under "Notes". Review each file against `unslop` and your outline, then create the issue with `gh issue create --body-file`. Put each issue in its checkpoint's milestone and on the project board, if the task has them.
 
-Write the plan in this shape:
+Outline the plan in this shape, and send the outline to a `model-policy:coder` to write up. The coder writes the plan to a file in the session scratchpad (a temp dir if none is named) and reports the path under "Notes". Review the file against `unslop` and your outline before you show it:
 
 - Goal: one or two sentences.
 - Approach: for anything beyond a small fix, two or three options in a line each, and the one you picked with the reason.
@@ -83,7 +83,7 @@ Write the plan in this shape:
 - Size: an estimate in lines. If it passes about 400 lines or mixes unrelated work, split it into separate PRs and plan the first one.
 - Risk tier: low, medium, or high, using the tiers in `verify-before-pr`.
 
-Show the plan with the issue links, and wait for the user's approval. Don't create a branch or spawn a coder before they approve. If the plan changes in a way the user would care about later, update the issues, show the change, and ask again.
+Show the plan with the issue links, and wait for the user's approval. Don't create a branch or send code work to a coder before they approve. If the plan changes in a way the user would care about later, update the issues, show the change, and ask again.
 
 ## 3. Build through agents
 
@@ -113,7 +113,7 @@ The review doesn't run again, with one exception. If a finding shows the approac
 
 This is the only step that writes lessons. Each repo has its own LESSONS.md at its root.
 
-Look at what the checks, the review, and the user found. For each mistake worth remembering, add an entry to the repo's LESSONS.md, and create the file if it doesn't exist:
+Look at what the checks, the review, and the user found. For each mistake worth remembering, write the exact entry text in this form. Send it to a `model-policy:mechanic`, which adds it to the repo's LESSONS.md and creates the file if it doesn't exist. The mechanic does not commit:
 
 ```
 ## YYYY-MM-DD: <short title>
@@ -124,13 +124,13 @@ Look at what the checks, the review, and the user found. For each mistake worth 
 
 If the same mistake is already in LESSONS.md, it has happened before. Propose a lasting fix to the user instead of a second entry.
 
-Commit LESSONS.md on the branch before you open the PR, so the user approves it with the rest.
+Commit LESSONS.md on the branch yourself with `git commit`, before you open the PR, so the user approves it with the rest.
 
 A bug that an earlier merged change caused gets its lesson here too, in the PR that fixes it. Say what the earlier review should have caught.
 
 ## 8. Open the PR and get it approved
 
-Before you open the PR, update the description `verify-before-pr` wrote so it matches the final diff, including the fixes from step 6. Push the branch and open a PR into the default branch with that description. It closes its issues with `Closes #N` lines. Give the user the link, the risk tier, and a short summary. This is the user's review.
+Before you open the PR, have a `model-policy:coder` update the description file `verify-before-pr` had written so it matches the final diff, including the fixes from step 6. Review the file against `unslop` and the diff. Push the branch and open a PR into the default branch with `gh pr create --body-file` and that file. It closes its issues with `Closes #N` lines. Give the user the link, the risk tier, and a short summary. This is the user's review.
 
 Before merge, confirm:
 

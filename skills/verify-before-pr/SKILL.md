@@ -1,6 +1,6 @@
 ---
 name: "verify-before-pr"
-description: "Use before opening a PR, pushing, or calling a coding task done. It runs the real checks and each issue's done-when tests, trims the diff, and writes the PR description."
+description: "Use before opening a PR, pushing, or calling a coding task done. It runs the real checks and each issue's done-when tests, trims the diff, and has the PR description written."
 ---
 
 # Verify before PR
@@ -31,9 +31,9 @@ Read the full diff again. Remove dead code, debug prints, unused imports, commen
 
 Keep the change small. If it is over about 400 lines or mixes unrelated changes, propose splitting it into separate PRs.
 
-## 5. Write the PR description
+## 5. Get the PR description written
 
-Follow the PR description format in the `git-messages` skill. Its Risk section names the tier and how to revert. End the Changes section with a `Closes #N` line for each issue the PR solves.
+Do not write the PR description yourself. Send an outline to a `model-policy:coder`: the changes, the check results, the risk tier, and the issues the PR solves. Tell it to follow the PR description format in the `git-messages` skill, to write the description to a file in the session scratchpad (a temp dir if none is named), and to report the path under "Notes". Its Risk section names the tier and how to revert. The Changes section ends with a `Closes #N` line for each issue the PR solves.
 
 Set the risk tier from what the change touches. Never set it from who wrote the change. The tiers are:
 
@@ -42,6 +42,8 @@ Set the risk tier from what the change touches. Never set it from who wrote the 
 - High. Auth, billing, data migrations, CI workflow files, installers, updaters, and anything that deletes data.
 
 The user reviews every PR into the default branch. For a high-risk change, point them to the parts that need the closest look. An agent's approval never replaces a person's.
+
+Review the file against `unslop` and the diff, then open the PR with `gh pr create --body-file`.
 
 ## 6. Report
 
