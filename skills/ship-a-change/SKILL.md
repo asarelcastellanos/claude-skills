@@ -113,7 +113,7 @@ The review doesn't run again, with one exception. If a finding shows the approac
 
 This is the only step that writes lessons. Each repo has its own LESSONS.md at its root.
 
-Look at what the checks, the review, and the user found. For each mistake worth remembering, add an entry to the repo's LESSONS.md, and create the file if it doesn't exist:
+Look at what the checks, the review, and the user found. For each mistake worth remembering, write the exact entry text in this form. Send it to a `model-policy:mechanic`, which adds it to the repo's LESSONS.md and creates the file if it doesn't exist:
 
 ```
 ## YYYY-MM-DD: <short title>
@@ -124,7 +124,7 @@ Look at what the checks, the review, and the user found. For each mistake worth 
 
 If the same mistake is already in LESSONS.md, it has happened before. Propose a lasting fix to the user instead of a second entry.
 
-Commit LESSONS.md on the branch before you open the PR, so the user approves it with the rest.
+Have the mechanic commit LESSONS.md on the branch before you open the PR, so the user approves it with the rest.
 
 A bug that an earlier merged change caused gets its lesson here too, in the PR that fixes it. Say what the earlier review should have caught.
 
