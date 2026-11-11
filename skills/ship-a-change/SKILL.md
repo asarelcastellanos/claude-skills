@@ -95,17 +95,17 @@ A task with checkpoints gets one branch per checkpoint, named as step 1 says. Cu
 
 Hand each issue to its agent with a spec, as `model-roles` describes. Include the issue's "Done when" list in the spec. For a bug fix, the first piece is the failing test: have the coder write it and show it failing before the fix.
 
-Build independent issues in parallel. Give each one its own agent on its own branch, then merge the branches into the working branch one after another. Do this only when the issues touch different files and none depends on another's changes. If they share files or depend on each other, or if you can't tell, build them one at a time. After each merge, run the checks before you merge the next branch.
+Build independent issues in parallel. Give each one its own agent on its own branch, then merge the branches into the working branch one after another. Do this only when the issues touch different files and none depends on another's changes. If they share files or depend on each other, or if you can't tell, build them one at a time. When the task has no checkpoints, run the checks after each merge into the working branch, before you merge the next branch. When it has checkpoints, the rule in the next paragraph applies instead.
 
 Read each agent's report and diff before you accept it. Send corrections to the same agent with SendMessage. Don't fix the code yourself.
 
-Merge a feature PR into a checkpoint branch when its project checks are green and you have read its diff. The user's approval of the plan covers that merge. Then delete the feature branch, locally and on the remote. After every merge, run the project's full checks on the checkpoint branch before you merge anything else. A red checkpoint branch blocks every further merge until it is fixed. If the repo has CI, make it run on PRs into checkpoint branches as well as the default branch.
+Merge a feature PR into a checkpoint branch when its author has run the tests that cover the change and you have read its diff. The user's approval of the plan covers that merge. Then delete the feature branch, locally and on the remote. Don't run the full checks after each merge into the checkpoint branch. Run them once, locally, on the checkpoint branch before the final PR into the default branch. If they pass, apart from failures the repo documents as known, the final PR is safe to merge. If they fail, fix the checkpoint branch first.
 
 Commit on the branch in small steps, with messages that follow `git-messages`. Branch commits don't need the user's approval.
 
 ## 4. Verify
 
-Run the `verify-before-pr` skill. It runs the project's checks and every check on each issue's "Done when" list. Do not skip it because the change looks small. With checkpoints, the "Done when" checks run on the checkpoint branch before the final PR, not per feature PR.
+Run the `verify-before-pr` skill. It runs the project's checks and every check on each issue's "Done when" list. Do not skip it because the change looks small. With checkpoints, the full checks and each issue's "Done when" checks run on the checkpoint branch once, before the final PR, not per feature PR.
 
 ## 5. Review
 
