@@ -42,7 +42,7 @@ The vaguer the request, the more questions you ask:
 
 When the user says something fails, breaks, or behaves differently than they expect, do this before you investigate or fix anything, even when the fix looks small:
 
-1. Create a GitHub issue that states the report in the user's words.
+1. Have a `model-policy:coder` write a GitHub issue that states the report in the user's words, from your outline. Review it against `unslop` and the report, then create it.
 2. Try to reproduce it. Have a `model-policy:scout` run the steps, or run them yourself.
 3. Record the attempt on the issue with `gh issue comment`: the steps, what was expected, what happened, and whether it reproduced. Paste the relevant output. Remove tokens, keys, and personal data from it first. For a screenshot, describe it in the comment and ask the user to attach the image.
 4. Add a "Done when" list to the issue. Its first check is the reproduction, which must now pass.
@@ -72,9 +72,9 @@ Show the checkpoints with the plan for the first one.
 
 ## 2. Plan, track, then get the plan approved
 
-Write one GitHub issue for each piece of work, with `gh issue create`, unless a reported failure already has its issue. Each issue ends with a "Done when" list: the tests or checks that prove the issue is solved. Put each issue in its checkpoint's milestone and on the project board, if the task has them. Write the user's answers from step 1 into the issues they affect.
+Create one GitHub issue for each piece of work, with `gh issue create`, unless a reported failure already has its issue. Do not write the issue bodies yourself. Send an outline of each issue to a `model-policy:coder`. The outline holds the goal, the user's answers from step 1 that affect the issue, and its "Done when" list: the tests or checks that prove the issue is solved. Review each body against `unslop` and your outline, then create the issue. Put each issue in its checkpoint's milestone and on the project board, if the task has them.
 
-Write the plan in this shape:
+Outline the plan in this shape, and send the outline to a `model-policy:coder` to write up. Review the result against `unslop` and your outline before you show it:
 
 - Goal: one or two sentences.
 - Approach: for anything beyond a small fix, two or three options in a line each, and the one you picked with the reason.
@@ -83,7 +83,7 @@ Write the plan in this shape:
 - Size: an estimate in lines. If it passes about 400 lines or mixes unrelated work, split it into separate PRs and plan the first one.
 - Risk tier: low, medium, or high, using the tiers in `verify-before-pr`.
 
-Show the plan with the issue links, and wait for the user's approval. Don't create a branch or spawn a coder before they approve. If the plan changes in a way the user would care about later, update the issues, show the change, and ask again.
+Show the plan with the issue links, and wait for the user's approval. Don't create a branch or send code work to a coder before they approve. If the plan changes in a way the user would care about later, update the issues, show the change, and ask again.
 
 ## 3. Build through agents
 
@@ -130,7 +130,7 @@ A bug that an earlier merged change caused gets its lesson here too, in the PR t
 
 ## 8. Open the PR and get it approved
 
-Before you open the PR, update the description `verify-before-pr` wrote so it matches the final diff, including the fixes from step 6. Push the branch and open a PR into the default branch with that description. It closes its issues with `Closes #N` lines. Give the user the link, the risk tier, and a short summary. This is the user's review.
+Before you open the PR, have a `model-policy:coder` update the description `verify-before-pr` had written so it matches the final diff, including the fixes from step 6. Review the update against `unslop` and the diff. Push the branch and open a PR into the default branch with that description. It closes its issues with `Closes #N` lines. Give the user the link, the risk tier, and a short summary. This is the user's review.
 
 Before merge, confirm:
 
