@@ -78,7 +78,7 @@ Outline the plan in this shape, and send the outline to a `model-policy:coder` t
 
 - Goal: one or two sentences.
 - Approach: for anything beyond a small fix, two or three options in a line each, and the one you picked with the reason.
-- Issues: each issue's number and title, the agent that does it (`model-policy:coder`, `model-policy:mechanic`, or `model-policy:scout`), and which can run in parallel.
+- Issues: each issue's number and title, the agent that does it (`model-policy:coder`, `model-policy:mechanic`, or `model-policy:scout`), and which can run in parallel under the rule in step 3.
 - Tests: for each issue, the tests or checks that prove the change solves it. For a bug, the test that reproduces it. A plan without them is not finished.
 - Size: an estimate in lines. If it passes about 400 lines or mixes unrelated work, split it into separate PRs and plan the first one.
 - Risk tier: low, medium, or high, using the tiers in `verify-before-pr`.
@@ -90,6 +90,8 @@ Show the plan with the issue links, and wait for the user's approval. Don't crea
 Create a branch. Never work on the default branch.
 
 Hand each issue to its agent with a spec, as `model-roles` describes. Include the issue's "Done when" list in the spec. For a bug fix, the first piece is the failing test: have the coder write it and show it failing before the fix.
+
+Build independent issues in parallel. Give each one its own agent on its own branch, then merge the branches into the working branch one after another. Do this only when the issues touch different files and none depends on another's changes. If they share files or depend on each other, or if you can't tell, build them one at a time. After each merge, run the checks before you merge the next branch.
 
 Read each agent's report and diff before you accept it. Send corrections to the same agent with SendMessage. Don't fix the code yourself.
 
