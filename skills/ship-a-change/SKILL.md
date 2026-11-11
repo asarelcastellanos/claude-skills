@@ -68,6 +68,8 @@ Once the user picks a style, create the milestones and a project board:
 - `gh` has no milestone command. Create each milestone with `gh api repos/{owner}/{repo}/milestones -f title="<name>"`, and name it after the task as well as the checkpoint, such as "Billing 2.4.0" or "Billing: prototype".
 - Create the board with `gh project create --owner <owner> --title "<task>"`, link it with `gh project link`, and add each issue with `gh project item-add`. These need the `project` scope. If `gh` reports it missing, ask the user to run `gh auth refresh -s project`, and continue without the board until they do.
 
+Each checkpoint also gets a branch, which step 3 creates. Name it `release/<version>` for the versions style and `checkpoint/<short-name>` for the other styles.
+
 Show the checkpoints with the plan for the first one.
 
 ## 2. Plan, track, then get the plan approved
@@ -89,21 +91,25 @@ Show the plan with the issue links, and wait for the user's approval. Don't crea
 
 Create a branch. Never work on the default branch.
 
+A task with checkpoints gets one branch per checkpoint, named as step 1 says. Cut it from the updated default branch once the user approves the plan for that checkpoint. Cut each feature branch from the checkpoint branch, and point its PR at the checkpoint branch, not the default branch. A single change with no checkpoints keeps one branch and one PR into the default branch.
+
 Hand each issue to its agent with a spec, as `model-roles` describes. Include the issue's "Done when" list in the spec. For a bug fix, the first piece is the failing test: have the coder write it and show it failing before the fix.
 
 Build independent issues in parallel. Give each one its own agent on its own branch, then merge the branches into the working branch one after another. Do this only when the issues touch different files and none depends on another's changes. If they share files or depend on each other, or if you can't tell, build them one at a time. After each merge, run the checks before you merge the next branch.
 
 Read each agent's report and diff before you accept it. Send corrections to the same agent with SendMessage. Don't fix the code yourself.
 
+Merge a feature PR into a checkpoint branch when its project checks are green and you have read its diff. The user's approval of the plan covers that merge. Then delete the feature branch, locally and on the remote. After every merge, run the project's full checks on the checkpoint branch before you merge anything else. A red checkpoint branch blocks every further merge until it is fixed. If the repo has CI, make it run on PRs into checkpoint branches as well as the default branch.
+
 Commit on the branch in small steps, with messages that follow `git-messages`. Branch commits don't need the user's approval.
 
 ## 4. Verify
 
-Run the `verify-before-pr` skill. It runs the project's checks and every check on each issue's "Done when" list. Do not skip it because the change looks small.
+Run the `verify-before-pr` skill. It runs the project's checks and every check on each issue's "Done when" list. Do not skip it because the change looks small. With checkpoints, the "Done when" checks run on the checkpoint branch before the final PR, not per feature PR.
 
 ## 5. Review
 
-Run the `pr-review` skill once, on the full diff against the default branch. It spawns fresh-context `model-policy:reviewer` agents from the main session. Don't hand the whole review to one agent, because a subagent can't start agents of its own. Pick the depth from the risk tier: low gets quick, medium gets standard, and high gets deep.
+Run the `pr-review` skill once, on the full diff against the default branch. It spawns fresh-context `model-policy:reviewer` agents from the main session. Don't hand the whole review to one agent, because a subagent can't start agents of its own. With checkpoints, the review covers the checkpoint branch's full diff against the default branch, once, before the PR into the default branch. It doesn't cover the feature PRs one by one. Pick the depth from the risk tier: low gets quick, medium gets standard, and high gets deep.
 
 ## 6. Address findings
 
@@ -130,9 +136,11 @@ Commit LESSONS.md on the branch yourself with `git commit`, before you open the 
 
 A bug that an earlier merged change caused gets its lesson here too, in the PR that fixes it. Say what the earlier review should have caught.
 
+With checkpoints, record the lessons once, on the checkpoint branch before the final PR, not per feature PR.
+
 ## 8. Open the PR and get it approved
 
-Before you open the PR, have a `model-policy:coder` update the description file `verify-before-pr` had written so it matches the final diff, including the fixes from step 6. Review the file against `unslop` and the diff. Push the branch and open a PR into the default branch with `gh pr create --body-file` and that file. It closes its issues with `Closes #N` lines. Give the user the link, the risk tier, and a short summary. This is the user's review.
+Before you open the PR, have a `model-policy:coder` update the description file `verify-before-pr` had written so it matches the final diff, including the fixes from step 6. Review the file against `unslop` and the diff. Push the branch and open a PR into the default branch with `gh pr create --body-file` and that file. It closes its issues with `Closes #N` lines. With checkpoints, this is the PR from the checkpoint branch, and its lines cover every issue merged into it, because GitHub closes an issue only when a PR reaches the default branch. Give the user the link, the risk tier, and a short summary. This is the user's review.
 
 Before merge, confirm:
 
@@ -145,7 +153,7 @@ Merge only after the user approves.
 
 ## 9. Clean up
 
-After the merge, delete the branch, locally and on the remote. Check that the PR closed its issues.
+After the merge, delete the branch, locally and on the remote. With checkpoints, that is the checkpoint branch. Check that the PR closed its issues.
 
 If the merge finishes a checkpoint, close its milestone with `gh api -X PATCH repos/{owner}/{repo}/milestones/<number> -f state=closed`. With versions as the style, also tag it: check out the default branch, pull, run `git tag v<version>`, and push the tag with `git push origin v<version>`. Before you push a tag, check whether the repo's CI publishes on tags, and ask the user first if it does.
 

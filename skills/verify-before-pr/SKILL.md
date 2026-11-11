@@ -33,7 +33,7 @@ Keep the change small. If it is over about 400 lines or mixes unrelated changes,
 
 ## 5. Get the PR description written
 
-Do not write the PR description yourself. Send an outline to a `model-policy:coder`: the changes, the check results, the risk tier, and the issues the PR solves. Tell it to follow the PR description format in the `git-messages` skill, to write the description to a file in the session scratchpad (a temp dir if none is named), and to report the path under "Notes". Its Risk section names the tier and how to revert. The Changes section ends with a `Closes #N` line for each issue the PR solves.
+Do not write the PR description yourself. Send an outline to a `model-policy:coder`: the changes, the check results, the risk tier, and the issues the PR solves. Tell it to follow the PR description format in the `git-messages` skill, to write the description to a file in the session scratchpad (a temp dir if none is named), and to report the path under "Notes". Its Risk section names the tier and how to revert. The Changes section ends with a `Closes #N` line for each issue the PR solves. When the task has checkpoints, a feature PR targets the checkpoint branch and leaves the `Closes #N` lines for the final PR from the checkpoint branch, because a `Closes` line in a PR into a non-default branch does not close the issue.
 
 Set the risk tier from what the change touches. Never set it from who wrote the change. The tiers are:
 
