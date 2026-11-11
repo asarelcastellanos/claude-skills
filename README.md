@@ -14,7 +14,7 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 
 1. Understand the task. The vaguer the request, the more questions Claude asks before planning. When I report a failure, Claude first opens an issue, tries to reproduce it, and records the result on the issue. A large or vague task is split into checkpoints. Claude offers three styles, such as versions, vertical slices or phases, and versions continue from the project's current version. Each checkpoint is a GitHub milestone, and a project board shows them all.
 2. Write one GitHub issue per piece of work, each with a "Done when" list of checks. The plan names the checks for every issue, and I approve it.
-3. Agents build the change on a branch. Opus supervises, Sonnet writes code, Haiku does lookups. A task with checkpoints gets a branch per checkpoint, named `release/<version>` for versions. Feature PRs target that branch, and the full checks run on it after every merge.
+3. Agents build the change on a branch. Opus supervises, Sonnet writes code, Haiku does lookups. A task with checkpoints gets a branch per checkpoint, named `release/<version>` for versions. Feature PRs target that branch, and the full checks run once on it, before the PR into the default branch.
 4. Run the project's checks and every issue's "Done when" checks.
 5. Review the full diff once, just before the PR to main.
 6. Fix the findings and run the checks again.
