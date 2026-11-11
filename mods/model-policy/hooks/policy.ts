@@ -4,8 +4,11 @@ import type { ModelPolicyDay, ModelPolicyPick } from '../types'
 
 export const WORKER_MODEL = 'sonnet'
 
-// The main session may write prose, logs, and anything under a temp dir or a .claude/ directory.
-const WRITABLE_EXTENSIONS = ['.md', '.mdx', '.markdown', '.txt', '.log']
+// Prose files. Sonnet writes them. The main session writes only the auto-memory notes.
+const DOC_EXTENSIONS = ['.md', '.mdx', '.markdown', '.txt']
+
+// The main session may write logs, and anything under a temp dir or a .claude/ directory that is not prose.
+const LOG_EXTENSIONS = ['.log']
 
 export const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'other'] as const
 export type Family = (typeof FAMILIES)[number]
@@ -112,16 +115,38 @@ function inside(abs: string, root: string): boolean {
 	return abs === root || abs.startsWith(root + '/')
 }
 
+function resolvePath(path: string, home: string, cwd: string): string {
+	const expanded = home && /^~(?:\/|$)/.test(path) ? home + path.slice(1) : path
+	return normalize(expanded, cwd)
+}
+
+/** True when `path` is a Markdown or plain-text file. */
+export function isDocPath(path: string, home: string, cwd: string): boolean {
+	const lower = resolvePath(path, home, cwd).toLowerCase()
+	return DOC_EXTENSIONS.some(ext => lower.endsWith(ext))
+}
+
+// A file under <home>/.claude/projects/<project>/memory/, the auto-memory directory.
+function inMemoryDir(abs: string, home: string): boolean {
+	if (!home) return false
+	const root = normalize(home, '/') + '/.claude/projects/'
+	if (!abs.startsWith(root)) return false
+	const [project, dir, file] = abs.slice(root.length).split('/')
+	return !!project && dir === 'memory' && !!file
+}
+
 /**
- * The main session may write prose and logs (.md, .mdx, .markdown, .txt, .log), anything
- * under a temp dir (/tmp, /private/tmp, /var/folders, TMPDIR), and anything inside a
- * .claude/ directory at any level. Everything else is code, which Sonnet writes.
+ * The main session may not write prose (.md, .mdx, .markdown, .txt) anywhere, except in the
+ * auto-memory directory (~/.claude/projects/<project>/memory/). Sonnet writes prose.
+ * Otherwise it may write logs, anything under a temp dir (/tmp, /private/tmp, /var/folders,
+ * TMPDIR), and anything inside a .claude/ directory at any level. Everything else is code,
+ * which Sonnet writes.
  */
 export function mainSessionMayWrite(path: string, home: string, cwd: string, tmpdir = ''): boolean {
-	const expanded = home && /^~(?:\/|$)/.test(path) ? home + path.slice(1) : path
-	const abs = normalize(expanded, cwd)
+	const abs = resolvePath(path, home, cwd)
 	const lower = abs.toLowerCase()
-	if (WRITABLE_EXTENSIONS.some(ext => lower.endsWith(ext))) return true
+	if (DOC_EXTENSIONS.some(ext => lower.endsWith(ext))) return inMemoryDir(abs, home)
+	if (LOG_EXTENSIONS.some(ext => lower.endsWith(ext))) return true
 	if (abs.split('/').slice(0, -1).includes('.claude')) return true
 	const temps = tmpdir && tmpdir !== '/' ? [...TEMP_ROOTS, normalize(tmpdir, '/')] : TEMP_ROOTS
 	return temps.some(root => inside(abs, root))

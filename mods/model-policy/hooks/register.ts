@@ -17,6 +17,7 @@ import {
 	family,
 	fiveHourPercent,
 	formatWeek,
+	isDocPath,
 	isFileWrite,
 	mainSessionMayWrite,
 	mergeDay,
@@ -266,7 +267,16 @@ export const register: Register = (on, options) => {
 		// HOME is the user's home on macOS and Linux, USERPROFILE on Windows.
 		const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
 		const tmpdir = (await $.env.get('TMPDIR')) ?? ''
-		if (mainSessionMayWrite(path, home, await $.session.cwd(), tmpdir)) return next(e)
+		const cwd = await $.session.cwd()
+		if (mainSessionMayWrite(path, home, cwd, tmpdir)) return next(e)
+		if (isDocPath(path, home, cwd)) {
+			return {
+				deny:
+					`Model policy: the main session does not write docs. Only memory notes under ` +
+					`~/.claude/projects/*/memory/ are allowed. Send the writing to the model-policy:coder agent ` +
+					`with an outline, or an exact small edit to the model-policy:mechanic agent. Blocked path: ${path}`,
+			}
+		}
 		return {
 			deny:
 				`Model policy: the main session plans and reviews, it does not write code. ` +
@@ -284,9 +294,11 @@ export const register: Register = (on, options) => {
 		if (!isFileWrite(e.command, { home, cwd: await $.session.cwd(), tmpdir })) return next(e)
 		return {
 			deny:
-				`Model policy: the main session does not write code, including through the shell ` +
-				`(sed -i, redirects, tee, cp, mv, patches). Delegate this change to the model-policy:coder agent ` +
-				`with a precise spec. Blocked command: ${e.command.slice(0, 200)}`,
+				`Model policy: the main session does not write code or docs, including through the shell ` +
+				`(sed -i, redirects, tee, cp, mv, patches). Delegate code to the model-policy:coder agent ` +
+				`with a precise spec. Send docs to the model-policy:coder agent with an outline, or an exact ` +
+				`small edit to the model-policy:mechanic agent. Only memory notes under ~/.claude/projects/*/memory/ are allowed. ` +
+				`Blocked command: ${e.command.slice(0, 200)}`,
 		}
 	}).catch(($, e, next) =>
 		next.called ? next(e) : { deny: `${NAME}: the shell check failed, so the command is refused.` },
