@@ -20,7 +20,7 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 6. Fix the findings and run the checks again.
 7. Record mistakes worth remembering in the repo's `LESSONS.md`. This is the only step that writes lessons.
 8. Open the PR, which closes its issues. I approve the merge.
-9. Delete the branch. When a checkpoint is complete, close its milestone, tag the version if the checkpoints are versions, delete the checkpoint branch, and cut the next one from the default branch.
+9. Delete the branch. When a checkpoint is complete, close its milestone, tag the version if the checkpoints are versions, and delete the checkpoint branch.
 
 ## What's inside
 
