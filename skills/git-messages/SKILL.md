@@ -16,9 +16,16 @@ Every commit message and PR description follows the `unslop` and `technical-writ
 ## When the user approves
 
 - Commits on a feature branch don't need approval. Write them in this format and commit.
-- Never commit or push directly to the default branch. Changes reach it only through a PR.
+- Never commit or push directly to the default branch. Changes reach it only through a PR, except the direct-commit path in `ship-a-change`, where the user approves the diff first.
 - The user reviews the PR into the default branch. Open it, then give them the link with the title and description. Merge only after they approve.
 - If the user edits a message or description, use their version exactly.
+
+## Commit grouping
+
+- Make one commit per logical change, grouped by purpose, not per file or per edit.
+- Fold a fix or a follow-up edit into the commit it belongs to. Run `git commit --fixup=<sha>`, then `git rebase -i --autosquash <base>`.
+- Never make a commit for lint, a typo, or a review fix on its own.
+- Each PR squash-merges into one commit on the default branch, built from the PR title and body. Group the branch commits for the reviewer.
 
 ## Commit message format
 
@@ -68,6 +75,7 @@ A one-line change can skip the body.
 - <follow-up or reviewer focus; omit the section if there is none>
 ```
 
+- The PR title becomes the squash commit subject, and the PR body becomes the commit body. Keep the body to 2 to 4 bullets under "Changes", plus the "Testing" and "Risk" lines and the `Closes` lines, each kept short.
 - A reviewer reads it in under a minute.
 - Link to logs, screenshots, and long tables. Don't paste them.
 - "Risk" uses the tiers in the `verify-before-pr` skill.

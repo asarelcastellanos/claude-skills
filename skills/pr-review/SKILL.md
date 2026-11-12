@@ -7,7 +7,7 @@ description: "Use to review a diff or PR for real bugs. Parallel agents find bug
 
 The main session runs this skill and spawns every reviewer itself. A subagent can't start agents of its own, so never hand this whole skill to one agent. Each finder and verifier is a fresh-context `model-policy:reviewer` agent, as the `model-roles` skill describes. Spawn them with the Agent tool. Use a Workflow only when the user asks for one.
 
-Catching real bugs comes first. Keeping noise out comes second. When an agent wrote the change, every nit costs another commit.
+Catching real bugs comes first. Keeping noise out comes second. When an agent wrote the change, every nit costs another round of edits.
 
 ## Inputs
 
@@ -74,7 +74,7 @@ List the findings sorted by severity. For each one, give the tag, the file and l
 
 ## One review per PR
 
-A change gets one review, on the full diff, just before the PR into the default branch. Fixes for its findings rerun the checks, not the review. Review again only when the user asks, for example after a fix that changed the approach. A second review covers only what changed since the first and never repeats an earlier finding.
+A change gets one review, on the full diff, just before the PR into the default branch. Fixes for its findings go into the PR's existing commits and rerun the checks, not the review. The one exception is a finding that shows the approach was wrong, or a fix that grows past the size limit or leaves the reviewed diff, as step 6 of `ship-a-change` sets out. Review again only when the user asks, for example after a fix that changed the approach. A second review covers only what changed since the first and never repeats an earlier finding.
 
 ## If the repo has no REVIEW.md
 

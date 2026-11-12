@@ -10,16 +10,18 @@ A skill is a folder with a `SKILL.md` file. Claude loads a skill when a task mat
 
 ## How a change ships
 
-`ship-a-change` runs the process for any change worth a plan and a review. Small, clear changes skip the plan and the review, and Claude says so in one line. They still go through a PR I approve, and a reported failure still gets an issue first.
+`ship-a-change` runs the process for any change worth a plan and a review. Small, clear changes skip the plan and the review, and Claude says so in one line. They still need my approval before they merge, and a reported failure still gets an issue first. The PR is the unit of work. A change too small for its own PR joins the next related PR. A tiny docs or config edit can go straight to the default branch, but only after I approve its diff.
+
+Each logical change is one commit. Review fixes fold into the commit they fix, and every PR squash-merges, so its title and body become the one commit on the default branch.
 
 1. Understand the task. The vaguer the request, the more questions Claude asks before planning. When I report a failure, Claude first opens an issue, tries to reproduce it, and records the result on the issue. A large or vague task is split into checkpoints. Claude offers three styles, such as versions, vertical slices or phases, and versions continue from the project's current version. Each checkpoint is a GitHub milestone, and a project board shows them all.
 2. Write one GitHub issue per piece of work, each with a "Done when" list of checks. The plan names the checks for every issue, and I approve it.
 3. Agents build the change on a branch. Opus supervises, Sonnet writes code, Haiku does lookups. A task with checkpoints gets a branch per checkpoint, named `release/<version>` for versions. Feature PRs target that branch, and the full checks run once on it, before the PR into the default branch.
 4. Run the project's checks and every issue's "Done when" checks.
 5. Review the full diff once, just before the PR to main.
-6. Fix the findings and run the checks again.
+6. Fix the findings in the commits they belong to, and run the checks again.
 7. Record mistakes worth remembering in the repo's `LESSONS.md`. This is the only step that writes lessons.
-8. Open the PR, which closes its issues. I approve the merge.
+8. Open the PR, which closes its issues. I approve it, and Claude squash-merges it.
 9. Delete the branch. When a checkpoint is complete, close its milestone, tag the version if the checkpoints are versions, and delete the checkpoint branch.
 
 ## What's inside
@@ -66,6 +68,14 @@ A mod is a plugin of function hooks that changes how Claude Code itself behaves:
 | `session-monitor` | A sidebar pane with every subagent this session started (task, status, model, elapsed time, tool calls, tokens), the 5-hour and 7-day subscription limits with reset times, context fill, and session cost. Bars turn amber at 70% and red at 90%. `/monitor` opens it. The pane header shows the folder, git branch (with `*` for uncommitted changes), and main model, and a Policy section shows the `model-policy` tally when that mod is installed. Each limit shows when it fills at the current pace. Each agent and the main session show what they edited, and pressing a row expands it to files, read folders, and recent tools. It sets no status line. |
 | `session-coach` | When context is past 20% and your new prompt looks like a different task, it suggests `/clear` above the prompt. Haiku makes that call alongside your prompt, without delaying it. It also caps each Workflow run at 12 agents, halved past 80% of the 5-hour limit, and warns when the session passes 25, 50, and 100 agents. Change the limits in `/config`. |
 
+### Tools
+
+Three command-line tools support the skills. The install script does not install them. Each is a one-time command per machine. `web-ui` and `verify-before-pr` use Playwright CLI and the Impeccable detector.
+
+- `cc-safety-net` blocks `git reset --hard`, force push, `rm -rf` on dangerous paths, `curl | bash`, and reads of secret files. Install it with `npx -y cc-safety-net@latest install --claude-code`, then check it with `npx -y cc-safety-net@latest doctor`.
+- Playwright CLI takes screenshots and drives a browser without an MCP server, which costs fewer tokens than the MCP tools. Install it with `npm install -g @playwright/cli@latest`, then run `playwright-cli install --skills`.
+- The Impeccable detector checks a path or URL against 62 deterministic rules for AI design patterns, with no LLM. Run it with `npx impeccable detect <path-or-url>`. Exit code 2 means it found something.
+
 ### Web UI
 
 | Skill | What it does |
@@ -98,7 +108,11 @@ The skills are links, not copies, so `git pull` updates them. You don't need to 
 
 ### The mods run code from your checkout
 
-The mods are hooks, and Claude Code runs them with your permissions. Because they load from this folder, every session runs the mod code on the branch you have checked out. Keep this clone on `main`, and review other people's branches and PRs in a separate clone or a git worktree. Otherwise, checking out an untrusted branch runs its hooks in your next session.
+The mods are hooks, and Claude Code runs them with your permissions. Because they load from this folder, every session runs the mod code on the branch you have checked out. Keep this clone on `main`, and review other people's branches and PRs in a separate clone or a git worktree. Otherwise, checking out an untrusted branch runs its hooks in your next session. Build the workbench's own changes in a git worktree outside the loaded checkout too:
+
+```bash
+git worktree add ../claude-workbench-wt -b <branch> origin/main
+```
 
 ### Install only some mods
 
@@ -127,11 +141,11 @@ Most skills stand alone. These depend on others:
 
 ## Make it yours
 
-- **Writing rules:** edit `CLAUDE.md` to change what applies to every conversation.
-- **Brand color:** change `--accent` in your project's CSS. Every `web-ui` component follows it. See `skills/web-ui/references/setup.md`.
-- **Model policy:** type `/model-policy off` to turn it off for one session. Edit `mods/model-policy/hooks/policy.ts` to change which models it picks or which files the main session may write, then run `/reload-plugins`.
-- **New mods:** add a folder under `mods/`, list it in `.claude-plugin/marketplace.json`, and run the install script again.
-- **New skills:** add a folder with a `SKILL.md` under `skills/`, then run the install script again.
+- Edit `CLAUDE.md` to change the writing rules that apply to every conversation.
+- Change `--accent` in your project's CSS to set the brand color. Every `web-ui` component follows it. See `skills/web-ui/references/setup.md`.
+- Type `/model-policy off` to turn the model policy off for one session. Edit `mods/model-policy/hooks/policy.ts` to change which models it picks or which files the main session may write, then run `/reload-plugins`.
+- To add a mod, add a folder under `mods/`, list it in `.claude-plugin/marketplace.json`, and run the install script again.
+- To add a skill, add a folder with a `SKILL.md` under `skills/`, then run the install script again.
 
 ## License
 

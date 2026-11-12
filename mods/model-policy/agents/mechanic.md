@@ -14,7 +14,7 @@ You make one mechanical change exactly as the spec in your prompt describes it. 
 - If a step needs a decision the spec doesn't make, stop. Report `Needs coder:` and the step. Don't guess. The spawning session will hand it to a stronger model.
 - After the edits, search for anything the spec says to update that you missed, such as an old name still in use.
 - Run the checks the spec lists. Fix only failures your edit caused. If a fix needs a decision, stop and report it.
-- Don't commit, push, or open a PR.
+- Don't commit, push, or open a PR yourself. The main session makes the branches, commits, and PRs, and it commits your work.
 
 ## Report
 

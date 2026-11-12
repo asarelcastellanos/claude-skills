@@ -25,11 +25,13 @@ Use the changed behavior the way a user would. Run the CLI command, call the end
 
 For a bug fix, reproduce the bug before the fix and show it gone after. Confirm the fix addresses the root cause.
 
+For a UI change, use the "Verify the page" section in the `web-ui` skill.
+
 ## 4. Simplify the diff
 
 Read the full diff again. Remove dead code, debug prints, unused imports, commented-out code, and edits unrelated to the task. Remove abstractions the change does not need yet.
 
-Keep the change small. If it is over about 400 lines or mixes unrelated changes, propose splitting it into separate PRs.
+Keep the change sized as the "Size and grouping" rules in `ship-a-change` say. If it is too big or mixes unrelated changes, propose splitting it into separate PRs. If it is too small for its own PR, batch it into the next related PR or use the direct-commit path, as `ship-a-change` describes.
 
 ## 5. Get the PR description written
 
@@ -43,7 +45,7 @@ Set the risk tier from what the change touches. Never set it from who wrote the 
 
 The user reviews every PR into the default branch. For a high-risk change, point them to the parts that need the closest look. An agent's approval never replaces a person's.
 
-Review the file against `unslop` and the diff, then open the PR with `gh pr create --body-file`.
+Review the file against `unslop` and the diff, then give the file to the next step. Inside `ship-a-change`, the PR opens at step 8, after the review. Used on its own, open the PR after `pr-review`.
 
 ## 6. Report
 
