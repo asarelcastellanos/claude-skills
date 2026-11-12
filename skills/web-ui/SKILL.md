@@ -99,6 +99,19 @@ These patterns mark a page as generic AI output. Remove them.
 - Title Case Headings. Use sentence case.
 - Fake precision such as "99.9% faster" or invented testimonials.
 
+## Verify the page
+
+Check the rendered page before you call it done. Neither tool needs an MCP server.
+
+1. Start the dev server.
+2. Run `playwright-cli open http://localhost:<port>`. If the browser is missing, run `playwright-cli install-browser` first.
+3. Run `playwright-cli resize 375 812`, then `playwright-cli screenshot --filename=<tmp dir>/mobile.png`. Run `playwright-cli resize 1440 900`, then `playwright-cli screenshot --filename=<tmp dir>/desktop.png`. Run `playwright-cli close` when you finish.
+4. Read both screenshots. Fix what breaks the rules above, such as overflow at 375 px, raw colors, or a missing state.
+5. Run `npx impeccable detect <src dir>` and `npx impeccable detect http://localhost:<port>`. Exit code 2 means findings. Fix them.
+6. For a brand font or a HeroUI default that a rule flags on purpose, run `npx impeccable ignores add-value <rule> <value> --reason "<why>"`. Never turn a rule off.
+
+Don't install Impeccable's skills or commands. The detector is all you need.
+
 ## When the kit lacks a piece
 
 1. Search the component list first: `references/css-classes.md`, or `node scripts/list_components.mjs` in the `heroui-react` skill.

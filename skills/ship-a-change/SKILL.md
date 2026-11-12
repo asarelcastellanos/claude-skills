@@ -13,14 +13,18 @@ It calls `model-roles`, `verify-before-pr`, `pr-review`, `address-review-finding
 
 Using the full process is a judgment call. Use it when a wrong change would cost time to undo, when the change touches several files or behaviors, or when the user asks for it.
 
-A small, clear change skips the plan and the review. Examples are a one-line fix, a setting, a copy edit, or a change the user spelled out exactly. Make the change through the right agent on a branch, run the checks, and open a PR with a `git-messages` description. The user still approves the merge. Tell the user in one line that you skipped the process, so they can ask for it.
+A small, clear change skips the plan and the review. Examples are a one-line fix, a setting, a copy edit, or a change the user spelled out exactly. Make the change through the right agent on a branch and run the checks. Then group it by the "Size and grouping" rules in step 2. A change that is too small for its own PR rides in the next related PR on the same branch, or uses the direct-commit path below. If no related PR exists yet, push the change on its own branch, tell the user it is parked there, and ask whether to ship it now or hold it. Any PR it does get uses a `git-messages` description. The user still approves before anything merges. Tell the user in one line that you skipped the process, so they can ask for it.
 
 Two rules apply even when you skip the process:
 
-- A reported failure always gets an issue and a reproduction first, as "When the user reports a failure" below describes.
-- Changes reach the default branch only through a PR the user approves.
+- A reported failure always gets an issue and a reproduction first, as "When the user reports a failure" below describes. A failure whose fix is a few lines still rides in the next related PR instead of getting its own PR, unless the user wants it shipped now.
+- Changes reach the default branch only through a PR the user approves, or through the direct-commit path below.
 
 When you use the process, create a task list with the nine steps below and tick each one off as you finish it.
+
+### Direct-commit path
+
+A docs-only, config-only, or workbench-internal edit can skip the PR when the "Size and grouping" rules in step 2 say it is too small for one. Have a `model-policy:mechanic` make the edit in the main clone, on the default branch with a clean working tree. Show the user `git diff`. After the user approves, commit it and push it with `git push origin <default branch>`. The user approves each one. This path never applies to code, installers, hooks, or CI files. It is the only exception to never committing to the default branch.
 
 ### Without GitHub
 
@@ -82,14 +86,23 @@ Outline the plan in this shape, and send the outline to a `model-policy:coder` t
 - Approach: for anything beyond a small fix, two or three options in a line each, and the one you picked with the reason.
 - Issues: each issue's number and title, the agent that does it (`model-policy:coder`, `model-policy:mechanic`, or `model-policy:scout`), and which can run in parallel under the rule in step 3.
 - Tests: for each issue, the tests or checks that prove the change solves it. For a bug, the test that reproduces it. A plan without them is not finished.
-- Size: an estimate in lines. If it passes about 400 lines or mixes unrelated work, split it into separate PRs and plan the first one.
+- Size: an estimate in lines, and how the work groups into PRs under the rules in "Size and grouping" below.
 - Risk tier: low, medium, or high, using the tiers in `verify-before-pr`.
 
 Show the plan with the issue links, and wait for the user's approval. Don't create a branch or send code work to a coder before they approve. If the plan changes in a way the user would care about later, update the issues, show the change, and ask again.
 
+### Size and grouping
+
+The PR is the unit of work, not the issue and not the edit. Aim for 100 to 400 lines in one PR.
+
+- Too big. If the work passes about 400 lines or mixes unrelated work, split it into separate PRs and plan the first one.
+- Too small. A change of about 30 lines or fewer does not get its own PR. Batch it into the next related PR on the same branch, or use the direct-commit path under "When to use it".
+- Docs, lesson entries, changelog lines, and version bumps ride in the PR they belong to.
+- Related issues that touch the same files go in one PR, with a `Closes #N` line for each.
+
 ## 3. Build through agents
 
-Create a branch. Never work on the default branch.
+Create a branch. Never work on the default branch, except on the direct-commit path. Agents work in the branch the main session made. They don't commit, push, or open PRs, so the main session runs `git commit`, `git push`, and `gh pr create`, and it commits each agent's work.
 
 A task with checkpoints gets one branch per checkpoint, named as step 1 says. Cut it from the updated default branch once the user approves the plan for that checkpoint. Cut each feature branch from the checkpoint branch, and point its PR at the checkpoint branch, not the default branch. A single change with no checkpoints keeps one branch and one PR into the default branch.
 
@@ -99,9 +112,9 @@ Build independent issues in parallel. Give each one its own agent on its own bra
 
 Read each agent's report and diff before you accept it. Send corrections to the same agent with SendMessage. Don't fix the code yourself.
 
-Merge a feature PR into a checkpoint branch when its author has run the tests that cover the change and you have read its diff. The user's approval of the plan covers that merge. Then delete the feature branch, locally and on the remote. Don't run the full checks after each merge into the checkpoint branch. Run them once, locally, on the checkpoint branch before the final PR into the default branch. If they pass, apart from failures the repo documents as known, the final PR is safe to merge. If they fail, fix the checkpoint branch first.
+Merge a feature PR into a checkpoint branch with `gh pr merge --squash --delete-branch` when its author has run the tests that cover the change and you have read its diff. The user's approval of the plan covers that merge. The flag deletes the feature branch, locally and on the remote. Don't run the full checks after each merge into the checkpoint branch. Run them once, locally, on the checkpoint branch before the final PR into the default branch. If they pass, apart from failures the repo documents as known, the final PR is safe to merge. If they fail, fix the checkpoint branch first. The final PR from the checkpoint branch is squash-merged too, and it always needs the user's approval.
 
-Commit on the branch in small steps, with messages that follow `git-messages`. Branch commits don't need the user's approval.
+Make one commit per logical change, with messages that follow `git-messages`. Fold review fixes and follow-up edits into the commit they fix. Run `git commit --fixup=<sha>`, then `git rebase -i --autosquash <base>` with `GIT_SEQUENCE_EDITOR=true` so no editor opens, and set `rebase.autoSquash` to true. Never add a separate commit such as "Fix review findings" to a feature branch before merge. Branch commits don't need the user's approval. Fold fixups only on a feature branch before its PR merges. Never rewrite a checkpoint branch, because other branches are cut from it. If the branch is already pushed, push the rewritten history with `git push --force-with-lease`. Never use `--force`, which the safety hook blocks.
 
 ## 4. Verify
 
@@ -113,7 +126,7 @@ Run the `pr-review` skill once, on the full diff against the default branch. It 
 
 ## 6. Address findings
 
-Run the `address-review-findings` skill on the review report. Fixes go to a coder, never to a reviewer. After the fixes, run the checks from step 4 again.
+Run the `address-review-findings` skill on the review report. Fixes go to a coder, never to a reviewer. The main session folds them into the existing commits, or into the same PR, and never opens a new PR just for fixes. After the fixes, run the checks from step 4 again.
 
 The review doesn't run again, with one exception. If a finding shows the approach is wrong, or a fix adds more than about 100 lines or touches files outside the reviewed diff, go back to step 2. Update the issues, show the user the new plan, and after the fix, review only the fix's diff.
 
@@ -149,11 +162,11 @@ Before merge, confirm:
 - The user approved the PR. An agent's approval never counts as a person's.
 - New commits after an approval get approved again.
 
-Merge only after the user approves.
+Merge only after the user approves, with `gh pr merge --squash --delete-branch`, which deletes the branch locally and on the remote. If the branch lives in a linked worktree, run `git worktree remove <path>` first and run the merge from the main clone with the PR number, because `gh` cannot switch a worktree to the default branch. The repo allows only squash merges, and its squash setting uses the PR title and body as the commit message. Check it with `gh api repos/{owner}/{repo} --jq .squash_merge_commit_message`, which should print `PR_BODY`. If it doesn't, pass `--subject` and `--body-file`. Keep the PR body short for that reason, as `git-messages` describes.
 
 ## 9. Clean up
 
-After the merge, delete the branch, locally and on the remote. With checkpoints, that is the checkpoint branch. Check that the PR closed its issues.
+After the merge, check that the branch is gone, locally and on the remote. The `--delete-branch` flag in step 8 removes both copies. A squash merge leaves a local branch looking unmerged, so `git branch -d` refuses to delete it, and the safety hook blocks `git branch -D`. With checkpoints, that is the checkpoint branch. Check that the PR closed its issues.
 
 If the merge finishes a checkpoint, close its milestone with `gh api -X PATCH repos/{owner}/{repo}/milestones/<number> -f state=closed`. With versions as the style, also tag it: check out the default branch, pull, run `git tag v<version>`, and push the tag with `git push origin v<version>`. Before you push a tag, check whether the repo's CI publishes on tags, and ask the user first if it does.
 
