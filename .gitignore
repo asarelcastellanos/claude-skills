@@ -1,2 +1,4 @@
 .DS_Store
 Thumbs.db
+# The engine writes a tsconfig.json beside each mod's generated typings.
+mods/*/tsconfig.json
